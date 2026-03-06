@@ -1,0 +1,453 @@
+---
+title: Puzzle Module
+description: Tactical puzzle system with Glicko ratings and themed puzzle paths
+---
+
+The **puzzle** module manages Lichess's extensive tactical puzzle database, user puzzle attempts, rating system, and themed puzzle paths.
+
+## Core Types
+
+### Puzzle
+
+From `modules/puzzle/src/main/Puzzle.scala`:
+
+```scala
+case class Puzzle(
+    id: PuzzleId,
+    gameId: GameId,                    // Source game
+    fen: Fen.Full,                     // Starting position
+    line: NonEmptyList[Uci.Move],      // Solution moves
+    glicko: Glicko,                    // Puzzle rating
+    plays: Int,                        // Times attempted
+    vote: Float,                       // Quality rating (votes)
+    themes: Set[PuzzleTheme.Key]       // Tags (fork, pin, etc.)
+):
+  // ply after "initial move" when we start solving
+  def initialPly: Ply = Fen.readPly(fen) | Ply.initial
+
+  lazy val boardAfterInitialMove: Option[chess.Position] =
+    for
+      p1 <- Fen.read(fen)
+      p2 <- p1.move(line.head).toOption.map(_.after)
+    yield p2
+
+  lazy val initialGame: chess.Game =
+    chess.Game(none, fenAfterInitialMove.some).withTurns(initialPly + 1)
+
+  lazy val fenAfterInitialMove: Fen.Full =
+    boardAfterInitialMove.map(Fen.write).err(s"Can't apply puzzle $id first move")
+
+  def color = !fen.colorOrWhite
+
+  def hasTheme(anyOf: PuzzleTheme*) = anyOf.exists(t => themes(t.key))
+```
+
+### Puzzle ID System
+
+Puzzles use base-62 encoding for compact IDs:
+
+```scala
+object Puzzle:
+  val idSize = 5
+
+  def toId(id: String) = (id.size == idSize).option(PuzzleId(id))
+
+  /* The mobile app requires numerical IDs.
+   * We convert string ids from and to Longs using base 62
+   */
+  object numericalId:
+
+    private val powers: List[Long] =
+      (0 until idSize).toList.map(m => Math.pow(62, m).toLong)
+
+    def apply(id: PuzzleId): Long = id.value.toList
+      .zip(powers)
+      .foldLeft(0L) { case (l, (char, pow)) =>
+        l + charToInt(char) * pow
+      }
+
+    def apply(l: Long): Option[PuzzleId] = (l > 130_000).so:
+      val str = powers.reverse
+        .foldLeft(("", l)) { case ((id, rest), pow) =>
+          val frac = rest / pow
+          (s"${intToChar(frac.toInt)}$id", rest - frac * pow)
+        }
+        ._1
+      (str.size == idSize).option(PuzzleId(str))
+
+    private def charToInt(c: Char) =
+      val i = c.toInt
+      if i > 96 then i - 71
+      else if i > 64 then i - 65
+      else i + 4
+
+    private def intToChar(i: Int): Char = {
+      if i < 26 then i + 65
+      else if i < 52 then i + 71
+      else i - 4
+    }.toChar
+```
+
+### User Result
+
+```scala
+case class UserResult(
+    puzzleId: PuzzleId,
+    userId: UserId,
+    win: PuzzleWin,
+    rating: (IntRating, IntRating)      // Before and after
+)
+```
+
+## Puzzle Themes
+
+Puzzles are tagged with tactical themes:
+
+```scala
+// From modules/puzzle/src/main/PuzzleTheme.scala
+enum PuzzleTheme(val key: String, val name: String, val description: String):
+  case advancedPawn extends PuzzleTheme("advancedPawn", "Advanced pawn", "Pawn near promotion")
+  case attraction extends PuzzleTheme("attraction", "Attraction", "Sacrifice to lure piece")
+  case backRankMate extends PuzzleTheme("backRankMate", "Back rank mate", "Mate on back rank")
+  case capturingDefender extends PuzzleTheme("capturingDefender", "Remove defender", "...")
+  case deflection extends PuzzleTheme("deflection", "Deflection", "Lure defender away")
+  case discoveredAttack extends PuzzleTheme("discoveredAttack", "Discovered attack", "...")
+  case doubleCheck extends PuzzleTheme("doubleCheck", "Double check", "Two pieces check")
+  case fork extends PuzzleTheme("fork", "Fork", "Attack two pieces")
+  case hangingPiece extends PuzzleTheme("hangingPiece", "Hanging piece", "Undefended piece")
+  case mate extends PuzzleTheme("mate", "Checkmate", "Win with checkmate")
+  case mateIn1 extends PuzzleTheme("mateIn1", "Mate in 1", "...")
+  case mateIn2 extends PuzzleTheme("mateIn2", "Mate in 2", "...")
+  case pin extends PuzzleTheme("pin", "Pin", "Piece cannot move")
+  case skewer extends PuzzleTheme("skewer", "Skewer", "Attack through valuable piece")
+  case zugzwang extends PuzzleTheme("zugzwang", "Zugzwang", "Forced bad move")
+  // ... 100+ total themes
+```
+
+## Puzzle Selection
+
+### PuzzleAngle
+
+From `modules/puzzle/src/main/PuzzleAngle.scala`:
+
+```scala
+enum PuzzleAngle:
+  case mix                           // Random mix
+  case theme(theme: PuzzleTheme)     // Specific theme
+  case opening(opening: PuzzleOpening) // From opening
+  
+object PuzzleAngle:
+  def apply(key: String): Option[PuzzleAngle] = ???
+```
+
+### Puzzle Path
+
+Users follow personalized puzzle paths:
+
+```scala
+// From modules/puzzle/src/main/PuzzlePath.scala
+case class PuzzlePath(
+    id: PuzzlePath.Id,
+    tier: PuzzleTier,
+    angle: PuzzleAngle,
+    rating: IntRating
+)
+
+object PuzzlePath:
+  opaque type Id = String
+  
+  def nextFor(
+      user: User,
+      angle: PuzzleAngle,
+      tier: PuzzleTier
+  ): Fu[Option[Puzzle]] = ???
+```
+
+### Difficulty Tiers
+
+```scala
+// From modules/puzzle/src/main/PuzzleDifficulty.scala
+enum PuzzleTier:
+  case top      // Rated 300-400 above user
+  case good     // Rated 150-250 above
+  case normal   // Within 150 of user rating  
+  case easier   // Below user rating
+```
+
+## Puzzle API
+
+From `modules/puzzle/src/main/PuzzleApi.scala`:
+
+```scala
+final class PuzzleApi(
+    colls: PuzzleColls,
+    trustApi: PuzzleTrustApi,
+    finisher: PuzzleFinisher,
+    batch: PuzzleBatch
+)(using Executor):
+  
+  def find(id: PuzzleId): Fu[Option[Puzzle]]
+  
+  def next(
+      user: User,
+      angle: PuzzleAngle,
+      difficulty: PuzzleTier
+  ): Fu[Option[Puzzle]]
+  
+  def complete(
+      user: User,
+      puzzle: Puzzle,
+      result: PuzzleResult
+  ): Fu[PuzzleComplete]
+```
+
+## Puzzle Completion
+
+From `modules/puzzle/src/main/PuzzleComplete.scala`:
+
+```scala
+case class PuzzleComplete(
+    puzzle: Puzzle,
+    user: User,
+    win: Boolean,
+    mode: PuzzleMode,
+    rated: Boolean
+)
+
+case class PuzzleResult(
+    puzzleId: PuzzleId,
+    win: Boolean,
+    time: Centis
+)
+```
+
+### PuzzleFinisher
+
+Handles puzzle completion and rating updates:
+
+```scala
+final class PuzzleFinisher(
+    api: PuzzleApi,
+    userApi: lila.user.UserApi,
+    historyApi: PuzzleHistoryApi,
+    colls: PuzzleColls
+)(using Executor):
+  
+  def apply(
+      puzzle: Puzzle,
+      user: User,
+      result: PuzzleResult
+  ): Fu[PuzzleComplete] =
+    // Update user puzzle rating (Glicko)
+    // Update puzzle difficulty rating
+    // Record in history
+    // Update statistics
+    ???
+```
+
+## Rating System
+
+Puzzles use Glicko-2 rating system:
+
+```scala
+// From chess library
+case class Glicko(
+    rating: Double,
+    deviation: Double,
+    volatility: Double
+)
+
+object Glicko:
+  val default = Glicko(
+    rating = 1500,
+    deviation = 350,
+    volatility = 0.06
+  )
+```
+
+## Daily Puzzle
+
+From `modules/puzzle/src/main/DailyPuzzle.scala`:
+
+```scala
+final class DailyPuzzle(
+    colls: PuzzleColls,
+    renderer: lila.hub.actors.Renderer,
+    cacheApi: lila.memo.CacheApi
+)(using Executor):
+  
+  def get: Fu[Option[DailyPuzzle.WithHtml]]
+  
+  private def find: Fu[Option[Puzzle]] =
+    // Select high-quality puzzle
+    // Prefer popular themes
+    // Avoid recent daily puzzles
+    ???
+
+case class DailyPuzzle(
+    puzzle: Puzzle,
+    fen: Fen.Full,
+    color: Color
+):
+  def id = puzzle.id
+
+object DailyPuzzle:
+  case class WithHtml(puzzle: DailyPuzzle, html: Html)
+```
+
+## Puzzle Dashboard
+
+From `modules/puzzle/src/main/PuzzleDashboard.scala`:
+
+```scala
+case class PuzzleDashboard(
+    global: PuzzleDashboard.Results,
+    byTheme: Map[PuzzleTheme.Key, PuzzleDashboard.Results]
+)
+
+object PuzzleDashboard:
+  case class Results(
+      nb: Int,                        // Total attempts
+      wins: Int,                      // Successful solves
+      rating: IntRating,              // Current rating
+      ratingDiff: IntRatingDiff,      // Recent change
+      firstWins: Int                  // Solved on first try
+  ):
+    def winRate = if nb > 0 then (wins * 100) / nb else 0
+```
+
+## Puzzle Activity
+
+```scala
+// From modules/puzzle/src/main/PuzzleActivity.scala
+case class PuzzleActivity(
+    userId: UserId,
+    puzzles: List[PuzzleActivity.Puzzle]
+)
+
+object PuzzleActivity:
+  case class Puzzle(
+      id: PuzzleId,
+      fen: Fen.Full,
+      color: Color,
+      win: Boolean,
+      timestamp: Instant
+  )
+```
+
+## Puzzle Batch
+
+For training mode with multiple puzzles:
+
+```scala
+// From modules/puzzle/src/main/PuzzleBatch.scala
+final class PuzzleBatch(
+    colls: PuzzleColls
+)(using Executor):
+  
+  def nextFor(
+      user: User,
+      nb: Int,
+      angle: PuzzleAngle
+  ): Fu[List[Puzzle]] =
+    // Select batch of puzzles
+    // Match user rating
+    // Apply theme filter
+    ???
+```
+
+## Anonymous Puzzles
+
+For users not logged in:
+
+```scala
+// From modules/puzzle/src/main/PuzzleAnon.scala
+final class PuzzleAnon(
+    colls: PuzzleColls,
+    pathApi: PuzzlePathApi
+)(using Executor):
+  
+  def getOneFor(angle: PuzzleAngle, difficulty: IntRating): Fu[Option[Puzzle]]
+```
+
+## Puzzle Count
+
+```scala
+case class PuzzleCount(
+    all: Int,
+    rated: Int,
+    win: Int,
+    loss: Int,
+    theme: Map[PuzzleTheme.Key, Int]
+)
+```
+
+## Opening Integration
+
+```scala
+// From modules/puzzle/src/main/PuzzleOpening.scala
+case class PuzzleOpening(
+    key: PuzzleOpening.Key,
+    name: String,
+    family: PuzzleOpening.Family
+)
+
+object PuzzleOpening:
+  opaque type Key = String
+  opaque type Family = String
+  
+  // Examples: sicilian, kings-indian, ruy-lopez, etc.
+```
+
+## JSON View
+
+```scala
+// From modules/puzzle/src/main/JsonView.scala
+final class JsonView(
+    gameJson: GameJson
+)(using Executor):
+  
+  def apply(
+      puzzle: Puzzle,
+      user: Option[User],
+      complete: Option[PuzzleComplete]
+  ): Fu[JsObject] =
+    Json.obj(
+      "puzzle" -> puzzleJson(puzzle),
+      "game" -> gameJson(puzzle.gameId),
+      "user" -> user.map(userStatsJson)
+    )
+```
+
+## Performance Features
+
+1. **Pre-computed paths** - Puzzle sequences cached per rating/theme
+2. **Indexed themes** - Fast lookup by theme combinations
+3. **Denormalized data** - Game info stored with puzzle
+4. **Rating buckets** - Puzzles grouped by rating ranges
+5. **Batch loading** - Multiple puzzles fetched at once
+
+## Module Dependencies
+
+### Dependencies
+- **game** - Source games for puzzles
+- **user** - User puzzle ratings
+- **rating** - Glicko calculations
+- **db** - Puzzle storage
+- **memo** - Caching
+
+### Dependents
+- **api** - Puzzle API endpoints
+- **storm** - Puzzle storm mode
+- **racer** - Puzzle racer mode
+
+## Related Modules
+
+<CardGroup cols={2}>
+  <Card title="Storm Module" icon="bolt" href="/modules/storm">
+    Speed puzzle solving mode
+  </Card>
+  <Card title="Racer Module" icon="flag-checkered" href="/modules/racer">
+    Competitive puzzle racing
+  </Card>
+</CardGroup>

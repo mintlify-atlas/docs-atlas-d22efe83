@@ -1,0 +1,504 @@
+---
+title: Security Module
+description: Authentication, authorization, and security features for Lichess
+---
+
+The **security** module handles authentication, authorization, rate limiting, IP blocking, email validation, and other security features critical to protecting the platform.
+
+## Authentication
+
+### Authenticator
+
+From `modules/security/src/main/Authenticator.scala`:
+
+```scala
+case class PasswordAndToken(password: ClearPassword, token: Option[TotpToken])
+
+type CredentialCheck = ClearPassword => Boolean
+
+case class LoginCandidate(
+    user: User, 
+    check: CredentialCheck, 
+    isBlanked: Boolean, 
+    must2fa: Boolean = false
+):
+  import LoginCandidate.*
+  import lila.user.TotpSecret.verify
+  
+  def apply(p: PasswordAndToken): Result =
+    val res =
+      if user.totpSecret.isEmpty && must2fa then Result.Must2fa
+      else if check(p.password) then
+        user.totpSecret.fold[Result](Result.Success(user)): tp =>
+          p.token.fold[Result](Result.MissingTotpToken): token =>
+            if tp.verify(token) then Result.Success(user) 
+            else Result.InvalidTotpToken
+      else if isBlanked then Result.BlankedPassword
+      else Result.InvalidUsernameOrPassword
+    lila.mon.user.auth.count(res.success).increment()
+    res
+    
+  def option(p: PasswordAndToken): Option[User] = apply(p).toOption
+```
+
+### Login Results
+
+```scala
+object LoginCandidate:
+  enum Result(val toOption: Option[User]):
+    def success = toOption.isDefined
+    
+    case Success(user: User) extends Result(user.some)
+    case InvalidUsernameOrPassword extends Result(none)
+    case Must2fa extends Result(none)
+    case BlankedPassword extends Result(none)
+    case WeakPassword extends Result(none)
+    case MissingTotpToken extends Result(none)
+    case InvalidTotpToken extends Result(none)
+```
+
+### Password Handling
+
+```scala
+final class Authenticator(
+    passHasher: PasswordHasher,
+    userRepo: UserRepo
+)(using Executor) extends lila.core.security.Authenticator:
+
+  def passEnc(p: ClearPassword): HashedPassword = passHasher.hash(p)
+
+  def compare(auth: AuthData, p: ClearPassword): Boolean =
+    val newP = auth.salt.fold(p): s =>
+      val salted = s"${p.value}{$s}" // BC (backward compatibility)
+      ClearPassword(if ~auth.sha512 then salted.sha512 else salted.sha1)
+    passHasher.check(auth.bpass, newP)
+
+  def authenticateById(
+      id: UserId, 
+      passwordAndToken: PasswordAndToken
+  ): Fu[Option[User]] =
+    loginCandidateById(id).map { _.flatMap { _.option(passwordAndToken) } }
+
+  def authenticateByEmail(
+      email: NormalizedEmailAddress,
+      passwordAndToken: PasswordAndToken
+  ): Fu[Option[User]] =
+    loginCandidateByEmail(email).map { _.flatMap { _.option(passwordAndToken) } }
+
+  def setPassword(id: UserId, p: ClearPassword): Funit =
+    userRepo.coll.update
+      .one(
+        $id(id),
+        $set(F.bpass -> passEnc(p).bytes) ++ $unset(F.salt, F.sha512)
+      )
+      .void
+```
+
+## Firewall
+
+From `modules/security/src/main/Firewall.scala`:
+
+```scala
+final class Firewall(
+    coll: Coll,
+    config: SecurityConfig,
+    scheduler: Scheduler,
+    ws: StandaloneWSClient
+)(using Executor):
+
+  private var current: Set[String] = Set.empty
+  private var proxies: Set[IpAddress] = Set.empty
+
+  scheduler.scheduleOnce(49.seconds):
+    loadFromDb()
+
+  scheduler.scheduleWithFixedDelay(47.seconds, 2.hours): () =>
+    blockProxyScrapeIps()
+
+  def blocksIp(ip: IpAddress): Boolean = 
+    current.contains(ip.value) || proxies.contains(ip)
+
+  def blocks(req: RequestHeader): Boolean =
+    val v = blocksIp(lila.common.HTTPRequest.ipAddress(req))
+    if v then lila.mon.security.firewall.block.increment()
+    v
+
+  def accepts(req: RequestHeader): Boolean = !blocks(req)
+
+  def blockIps(ips: Iterable[IpAddress]): Funit = ips.nonEmpty.so:
+    for
+      _ <- ips.toList.sequentiallyVoid: ip =>
+        coll.update.one(
+          $id(ip),
+          $doc("_id" -> ip, "date" -> nowInstant),
+          upsert = true
+        )
+      _ <- loadFromDb()
+    yield ()
+
+  def unblockIps(ips: Iterable[IpAddress]): Funit = ips.nonEmpty.so:
+    for _ <- coll.delete.one($inIds(ips)) yield loadFromDb()
+
+  private def loadFromDb(): Funit =
+    coll.distinctEasy[String, Set]("_id", $empty).map { ips =>
+      current = ips
+      lila.mon.security.firewall.ip.update(ips.size)
+    }
+
+  private def blockProxyScrapeIps() =
+    fetchProxyScrapeIps().map:
+      case Right(ips) =>
+        logger.info(s"Firewall: blocking ${ips.size} IPs from proxyscrape")
+        proxies = ips
+      case Left(status) =>
+        logger.warn:
+          s"Firewall: failed to fetch proxies from url: ${config.proxyscrapeUrl}, status: ${status}"
+
+  private def fetchProxyScrapeIps(): Fu[Either[Int, Set[IpAddress]]] =
+    if config.proxyscrapeUrl.isEmpty then fuccess(Right(Set.empty))
+    else
+      ws.url(config.proxyscrapeUrl)
+        .get()
+        .map: res =>
+          if res.status == 200 then
+            Right:
+              res
+                .body[String]
+                .linesIterator
+                .map(_.takeWhile(':' != _))
+                .flatMap(IpAddress.from)
+                .toSet
+                .take(5000)
+          else Left(res.status)
+```
+
+## IP Trust & Tiers
+
+### IpTrust
+
+```scala
+final class IpTrust(
+    geoIP: GeoIP,
+    torNodes: lila.security.Tor,
+    ipIntel: Ip2Proxy
+)(using Executor):
+  
+  def apply(ip: IpAddress): Fu[IpTrust.Score] =
+    // Analyze IP reputation
+    // Check if VPN/proxy
+    // Check geographic location
+    // Combine signals
+    ???
+
+object IpTrust:
+  opaque type Score = Int
+  
+  val trusted = Score(100)
+  val untrusted = Score(0)
+```
+
+### IpTiers
+
+```scala
+final class IpTiers(coll: Coll)(using Executor):
+  
+  def get(ip: IpAddress): Fu[Option[IpTier]]
+  
+  def set(ip: IpAddress, tier: IpTier): Funit
+
+enum IpTier:
+  case Tier1  // Highly trusted
+  case Tier2  // Trusted  
+  case Tier3  // Normal
+  case Tier4  // Suspicious
+  case Tier5  // Blocked
+```
+
+## Rate Limiting
+
+### Flood Protection
+
+```scala
+final class Flood(
+    cacheApi: lila.memo.CacheApi
+)(using Executor):
+  
+  def allowMessage(userId: UserId, text: String): Boolean =
+    // Check message rate
+    // Prevent rapid posting
+    ???
+  
+  def allowMove(ipAddress: IpAddress): Boolean =
+    // Prevent rapid moves
+    ???
+```
+
+## Email Security
+
+### Email Validation
+
+From `modules/security/src/main/EmailAddressValidator.scala`:
+
+```scala
+final class EmailAddressValidator(
+    disposableEmailDomain: DisposableEmailDomain,
+    dnsApi: DnsApi,
+    config: SecurityConfig
+)(using Executor):
+  
+  def validate(email: EmailAddress): Fu[Either[EmailError, EmailAddress]] =
+    // Check disposable email
+    // Verify MX records
+    // Check email format
+    ???
+```
+
+### Disposable Email Detection
+
+```scala
+final class DisposableEmailDomain(
+    coll: Coll,
+    ws: StandaloneWSClient,
+    config: SecurityConfig
+)(using Executor, Scheduler):
+  
+  private var domains: Set[String] = Set.empty
+  
+  def isDisposable(email: EmailAddress): Boolean =
+    domains.contains(email.domain.toLowerCase)
+  
+  def refresh(): Funit =
+    // Fetch updated list of disposable domains
+    // Update local cache
+    ???
+```
+
+### Email Change
+
+```scala
+case class EmailChange(
+    userId: UserId,
+    email: NormalizedEmailAddress,
+    token: String,
+    createdAt: Instant
+):
+  def isExpired = createdAt.isBefore(nowInstant.minusDays(3))
+```
+
+### Email Confirmation
+
+```scala
+final class EmailConfirm(
+    coll: Coll,
+    mailer: lila.mailer.Mailer
+)(using Executor):
+  
+  def send(user: User, email: EmailAddress): Funit =
+    val token = generateToken()
+    for
+      _ <- coll.insert.one(makeConfirm(user, email, token))
+      _ <- mailer.send(confirmEmail(user, email, token))
+    yield ()
+  
+  def confirm(token: String): Fu[Option[EmailAddress]]
+```
+
+## Two-Factor Authentication
+
+### TOTP (Time-based One-Time Password)
+
+```scala
+// From user module
+case class TotpSecret(value: String):
+  def verify(token: TotpToken): Boolean =
+    // Verify TOTP token
+    ???
+  
+  def toUri(user: User): String =
+    s"otpauth://totp/lichess:${user.username}?secret=$value&issuer=lichess.org"
+
+object TotpSecret:
+  def random: TotpSecret = 
+    TotpSecret(scalalib.SecureRandom.nextString(32))
+```
+
+## Fingerprinting
+
+```scala
+opaque type FingerPrint = String
+
+object FingerPrint extends OpaqueString[FingerPrint]:
+  // Browser fingerprint for device tracking
+  // Used to detect multi-accounting
+```
+
+## GeoIP
+
+```scala
+final class GeoIP(
+    config: SecurityConfig
+)(using Executor):
+  
+  def country(ip: IpAddress): Option[Country]
+  
+  def city(ip: IpAddress): Option[City]
+  
+  def asn(ip: IpAddress): Option[ASN]
+```
+
+## Permissions & Grants
+
+### Granter
+
+```scala
+object Granter:
+  
+  def apply(permission: Permission)(using me: Me): Boolean =
+    me.roles.exists(_.grants(permission))
+  
+  def of(permission: Permission)(user: User): Boolean =
+    user.roles.exists(_.grants(permission))
+
+enum Permission:
+  case ViewBlurs
+  case ModerateForum  
+  case ChatTimeout
+  case UserEvaluate
+  case UserModView
+  case CloseAccount
+  case SetTitle
+  case SetEmail
+  case IpBan
+  case PrintBan
+  // ... many more
+```
+
+## CSRF Protection
+
+```scala
+// From modules/security/src/main/CSRFRequestHandler.scala
+final class CSRFRequestHandler(
+    config: SecurityConfig
+):
+  
+  def check(req: RequestHeader): Boolean =
+    // Verify CSRF token
+    // Check request origin
+    ???
+```
+
+## Captcha
+
+### hCaptcha Integration
+
+```scala
+final class Hcaptcha(
+    ws: StandaloneWSClient,
+    config: SecurityConfig
+)(using Executor):
+  
+  def verify(response: String, ip: IpAddress): Fu[Boolean] =
+    ws.url("https://hcaptcha.com/siteverify")
+      .post(Map(
+        "secret" -> config.hcaptchaSecret,
+        "response" -> response,
+        "remoteip" -> ip.value
+      ))
+      .map: res =>
+        (res.json \ "success").asOpt[Boolean].getOrElse(false)
+```
+
+## Garbage Collection
+
+Clean up old security records:
+
+```scala
+final class GarbageCollector(
+    store: Store,
+    firewall: Firewall
+)(using Executor, Scheduler):
+  
+  scheduler.scheduleWithFixedDelay(1.hour, 1.day): () =>
+    cleanupExpiredSessions()
+    cleanupOldAttempts()
+    cleanupExpiredTokens()
+```
+
+## Security Configuration
+
+```scala
+case class SecurityConfig(
+    firewall: FirewallConfig,
+    hcaptchaSecret: String,
+    proxyscrapeUrl: String,
+    mailgunApiKey: String,
+    emailReplyTo: EmailAddress,
+    tor: TorConfig,
+    ip2proxy: Ip2ProxyConfig
+)
+```
+
+## DNS API
+
+```scala
+final class DnsApi(using Executor):
+  
+  def resolveMx(domain: String): Fu[List[String]] =
+    // Verify MX records for email validation
+    ???
+```
+
+## Session Store
+
+Manage user sessions:
+
+```scala
+final class Store(
+    coll: Coll,
+    cacheApi: lila.memo.CacheApi
+)(using Executor):
+  
+  def save(sessionId: String, userId: UserId, ip: IpAddress): Funit
+  
+  def delete(sessionId: String): Funit
+  
+  def closeUserExceptSessionId(userId: UserId, sessionId: String): Funit
+  
+  def openSessions(userId: UserId, nb: Int): Fu[List[Session]]
+```
+
+## Security Monitoring
+
+```scala
+// Metrics tracked
+lila.mon.security.firewall.block.increment()      // Firewall blocks
+lila.mon.user.auth.count(success).increment()     // Auth attempts
+lila.mon.security.tor.node.increment()            // Tor connections
+lila.mon.security.proxy.detect.increment()        // Proxy detection
+```
+
+## Module Dependencies
+
+### Dependencies
+- **user** - User authentication
+- **db** - Session and firewall storage
+- **mailer** - Email confirmations
+- **common** - IP address utilities
+- **memo** - Caching
+
+### Dependents
+- **auth** - Login/logout
+- **signup** - Account creation
+- **api** - API authentication
+- **mod** - Moderation actions
+
+## Related Modules
+
+<CardGroup cols={2}>
+  <Card title="User Module" icon="user" href="/modules/user">
+    User accounts and authentication
+  </Card>
+  <Card title="Mod Module" icon="gavel" href="/modules/mod">
+    Moderation and admin tools
+  </Card>
+</CardGroup>

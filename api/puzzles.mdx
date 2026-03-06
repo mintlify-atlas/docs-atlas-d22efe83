@@ -1,0 +1,563 @@
+---
+title: Puzzles API
+description: Endpoints for accessing puzzle data, solving puzzles, and tracking puzzle progress
+---
+
+## Get Daily Puzzle
+
+Get the daily puzzle.
+
+```bash
+GET /api/puzzle/daily
+```
+
+<ResponseExample>
+```json
+{
+  "game": {
+    "id": "abcd1234",
+    "perf": {
+      "key": "blitz",
+      "name": "Blitz"
+    },
+    "rated": true,
+    "players": [
+      {
+        "userId": "player1",
+        "name": "Player1",
+        "color": "white"
+      },
+      {
+        "userId": "player2",
+        "name": "Player2",
+        "color": "black"
+      }
+    ],
+    "pgn": "e4 e5 Nf3..."
+  },
+  "puzzle": {
+    "id": "01hgk",
+    "rating": 1500,
+    "plays": 12345,
+    "initialPly": 42,
+    "solution": ["e5f7", "g8h8", "f7h6"],
+    "themes": ["middlegame", "advantage", "short"]
+  }
+}
+```
+</ResponseExample>
+
+<ResponseField name="puzzle.id" type="string">
+  5-character puzzle ID
+</ResponseField>
+
+<ResponseField name="puzzle.rating" type="integer">
+  Puzzle difficulty rating
+</ResponseField>
+
+<ResponseField name="puzzle.plays" type="integer">
+  Number of times puzzle has been attempted
+</ResponseField>
+
+<ResponseField name="puzzle.solution" type="array">
+  Array of moves in UCI format
+</ResponseField>
+
+<ResponseField name="puzzle.themes" type="array">
+  Puzzle themes/tags
+</ResponseField>
+
+## Get Puzzle by ID
+
+Get a specific puzzle.
+
+```bash
+GET /api/puzzle/{id}
+```
+
+<ParamField path="id" type="string" required>
+  5-character puzzle ID
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl https://lichess.org/api/puzzle/01hgk
+```
+</CodeGroup>
+
+Returns same format as daily puzzle.
+
+## Get Next Puzzle
+
+Get a new puzzle for the authenticated user.
+
+```bash
+GET /api/puzzle/next
+```
+
+Requires authentication. Returns a puzzle tailored to the user's rating and preferences.
+
+<ResponseExample>
+```json
+{
+  "game": { },
+  "puzzle": {
+    "id": "02abc",
+    "rating": 1650,
+    "plays": 5432,
+    "initialPly": 35,
+    "solution": ["d4e5", "f6e5", "e1e5"],
+    "themes": ["endgame", "queenEndgame"]
+  }
+}
+```
+</ResponseExample>
+
+## Get Puzzle Activity
+
+Get recent puzzle activity for the authenticated user.
+
+```bash
+GET /api/puzzle/activity
+```
+
+Requires authentication.
+
+<ParamField query="max" type="integer" default="50">
+  Maximum number of entries (max 100)
+</ParamField>
+
+<ParamField query="before" type="timestamp">
+  Get entries before this timestamp
+</ParamField>
+
+<ResponseExample>
+```json
+[
+  {
+    "id": "01abc",
+    "date": 1658931600000,
+    "win": true,
+    "puzzle": {
+      "id": "01abc",
+      "fen": "r1bqkb1r/pppp1ppp/2n2n2/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
+      "rating": 1500,
+      "plays": 12345,
+      "solution": ["f3e5", "c6e5", "d1g4"],
+      "themes": ["fork", "short", "middlegame"]
+    }
+  }
+]
+```
+</ResponseExample>
+
+## Get Puzzle Dashboard
+
+Get puzzle dashboard statistics.
+
+```bash
+GET /api/puzzle/dashboard/{days}
+```
+
+<ParamField path="days" type="integer" required>
+  Number of days to include (7, 30, 60, or 90)
+</ParamField>
+
+<ResponseExample>
+```json
+{
+  "days": 30,
+  "global": {
+    "nb": 123,
+    "firstWins": 98,
+    "replayWins": 15,
+    "puzzleRatingAvg": 1650,
+    "performance": 1700
+  },
+  "themes": {
+    "mix": {
+      "theme": "mix",
+      "results": {
+        "nb": 45,
+        "firstWins": 35,
+        "replayWins": 5,
+        "performance": 1720
+      }
+    },
+    "opening": {
+      "theme": "opening",
+      "results": {
+        "nb": 12,
+        "firstWins": 8,
+        "replayWins": 2,
+        "performance": 1650
+      }
+    }
+  }
+}
+```
+</ResponseExample>
+
+## Batch Select Puzzles
+
+Get a batch of puzzles for a specific angle/theme.
+
+```bash
+GET /api/puzzle/batch/{angle}
+```
+
+<ParamField path="angle" type="string" required>
+  Puzzle theme/angle (e.g., `mix`, `opening`, `middlegame`, `endgame`, or specific theme)
+</ParamField>
+
+Returns a JSON object with puzzle IDs for the batch.
+
+## Solve Puzzle Batch
+
+Submit solutions for a batch of puzzles.
+
+```bash
+POST /api/puzzle/batch/{angle}
+```
+
+<ParamField path="angle" type="string" required>
+  Puzzle theme/angle
+</ParamField>
+
+<ParamField body="solutions" type="object" required>
+  Map of puzzle IDs to results (win/loss)
+</ParamField>
+
+Requires `puzzle:write` OAuth scope.
+
+## Vote on Puzzle Themes
+
+Vote on whether puzzle themes are accurate.
+
+```bash
+POST /api/puzzle/vote-themes
+```
+
+<ParamField body="votes" type="object" required>
+  Puzzle ID and theme votes
+</ParamField>
+
+Requires authentication.
+
+## Replay Puzzles
+
+Get puzzles for replay from a specific time period.
+
+```bash
+GET /api/puzzle/replay/{days}/{theme}
+```
+
+<ParamField path="days" type="integer" required>
+  Number of days (30, 60, 90)
+</ParamField>
+
+<ParamField path="theme" type="string" required>
+  Puzzle theme to replay
+</ParamField>
+
+## Puzzle Streak
+
+### Get Puzzle Streak
+
+Get a puzzle for the current streak.
+
+```bash
+GET /api/streak
+```
+
+<ResponseExample>
+```json
+{
+  "game": { },
+  "puzzle": { },
+  "streak": ["01abc", "02def", "03ghi"]
+}
+```
+</ResponseExample>
+
+### Submit Streak Result
+
+Submit streak score.
+
+```bash
+POST /api/streak/{score}
+```
+
+<ParamField path="score" type="integer" required>
+  Final streak score
+</ParamField>
+
+Requires `puzzle:write` OAuth scope.
+
+## Puzzle Storm
+
+### Get Puzzle Storm
+
+Get puzzles for a Puzzle Storm run.
+
+```bash
+GET /api/storm
+```
+
+Requires authentication.
+
+<ResponseExample>
+```json
+{
+  "puzzles": [
+    {
+      "id": "01abc",
+      "fen": "...",
+      "line": "e5f7 g8h8",
+      "rating": 1500
+    }
+  ],
+  "key": "unique-run-key"
+}
+```
+</ResponseExample>
+
+### Get Storm Dashboard
+
+Get Puzzle Storm statistics for a user.
+
+```bash
+GET /api/storm/dashboard/{username}
+```
+
+<ParamField path="username" type="string" required>
+  Username
+</ParamField>
+
+<ParamField query="days" type="integer" default="30">
+  Number of days to include
+</ParamField>
+
+<ResponseExample>
+```json
+{
+  "high": {
+    "allTime": 50,
+    "day": 45,
+    "week": 48,
+    "month": 50
+  },
+  "runs": [
+    {
+      "score": 45,
+      "highest": 1600,
+      "errors": 3,
+      "combo": 12,
+      "time": 95,
+      "at": 1658931600000
+    }
+  ]
+}
+```
+</ResponseExample>
+
+## Puzzle Racer
+
+### Create Puzzle Race
+
+Create a new puzzle race.
+
+```bash
+POST /api/racer
+```
+
+Requires `racer:write` OAuth scope.
+
+<ResponseExample>
+```json
+{
+  "id": "race123",
+  "url": "https://lichess.org/racer/race123"
+}
+```
+</ResponseExample>
+
+### Get Puzzle Race
+
+Get information about a puzzle race.
+
+```bash
+GET /api/racer/{id}
+```
+
+<ParamField path="id" type="string" required>
+  Race ID
+</ParamField>
+
+## Puzzles of a Player
+
+Get puzzles generated from a player's games.
+
+```bash
+GET /training/of-player
+```
+
+<ParamField query="name" type="string">
+  Player username (defaults to authenticated user)
+</ParamField>
+
+<ParamField query="page" type="integer" default="1">
+  Page number
+</ParamField>
+
+This endpoint returns HTML, not JSON. API version coming soon.
+
+## Puzzle Themes
+
+Common puzzle themes include:
+
+- **Tactical motifs**: `fork`, `pin`, `skewer`, `deflection`, `attraction`, `sacrifice`, `discoveredAttack`, `doubleCheck`, `exposedKing`, `interference`, `intermezzo`, `quietMove`, `xRayAttack`, `zugzwang`
+
+- **Material**: `mate`, `mateIn1`, `mateIn2`, `mateIn3`, `mateIn4`, `mateIn5`, `advantage`, `crushing`, `equality`
+
+- **Game phase**: `opening`, `middlegame`, `endgame`
+
+- **Length**: `oneMove`, `short`, `long`, `veryLong`
+
+- **Piece specific**: `bishopEndgame`, `knightEndgame`, `pawnEndgame`, `queenEndgame`, `queenRookEndgame`, `rookEndgame`
+
+- **Special**: `advancedPawn`, `capturingDefender`, `master`, `masterVsMaster`, `superGM`, `defensive`, `attacking`
+
+## Vote on Puzzle
+
+Vote on puzzle quality.
+
+```bash
+POST /training/{id}/vote
+```
+
+<ParamField path="id" type="string" required>
+  5-character puzzle ID
+</ParamField>
+
+<ParamField body="vote" type="integer" required>
+  Vote value: 1 (thumbs up) or -1 (thumbs down)
+</ParamField>
+
+Requires authentication.
+
+## Report Puzzle
+
+Report a puzzle as incorrect or inappropriate.
+
+```bash
+POST /training/{id}/report
+```
+
+<ParamField path="id" type="string" required>
+  5-character puzzle ID
+</ParamField>
+
+<ParamField body="reason" type="string" required>
+  Reason for report
+</ParamField>
+
+Requires authentication.
+
+## Vote on Puzzle Theme
+
+Vote on whether a theme applies to a puzzle.
+
+```bash
+POST /training/{id}/vote/{theme}
+```
+
+<ParamField path="id" type="string" required>
+  5-character puzzle ID
+</ParamField>
+
+<ParamField path="theme" type="string" required>
+  Theme name
+</ParamField>
+
+<ParamField body="vote" type="boolean" required>
+  true if theme applies, false if it doesn't
+</ParamField>
+
+Requires authentication.
+
+## Set Puzzle Difficulty
+
+Set preferred difficulty for a puzzle theme.
+
+```bash
+POST /training/difficulty/{theme}
+```
+
+<ParamField path="theme" type="string" required>
+  Theme name
+</ParamField>
+
+<ParamField body="difficulty" type="string" required>
+  Difficulty: `easiest`, `easier`, `normal`, `harder`, `hardest`
+</ParamField>
+
+Requires authentication.
+
+## Complete Puzzle
+
+Submit puzzle solution.
+
+```bash
+POST /training/complete/{theme}/{id}
+```
+
+<ParamField path="theme" type="string" required>
+  Puzzle theme
+</ParamField>
+
+<ParamField path="id" type="string" required>
+  5-character puzzle ID
+</ParamField>
+
+<ParamField body="win" type="boolean" required>
+  Whether puzzle was solved correctly
+</ParamField>
+
+<ParamField body="rated" type="boolean" default="true">
+  Whether attempt should affect rating
+</ParamField>
+
+Requires authentication.
+
+## Response Formats
+
+All puzzle endpoints return JSON. Puzzle objects include:
+
+<ResponseField name="id" type="string">
+  5-character puzzle ID
+</ResponseField>
+
+<ResponseField name="rating" type="integer">
+  Puzzle difficulty rating (typically 600-3000)
+</ResponseField>
+
+<ResponseField name="plays" type="integer">
+  Number of attempts by all users
+</ResponseField>
+
+<ResponseField name="initialPly" type="integer">
+  Starting ply in the game
+</ResponseField>
+
+<ResponseField name="solution" type="array">
+  Correct moves in UCI notation
+</ResponseField>
+
+<ResponseField name="themes" type="array">
+  Array of theme strings
+</ResponseField>
+
+<ResponseField name="game" type="object">
+  Source game information
+</ResponseField>

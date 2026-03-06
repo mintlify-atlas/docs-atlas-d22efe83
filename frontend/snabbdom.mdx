@@ -1,0 +1,495 @@
+---
+title: Snabbdom Virtual DOM
+description: Snabbdom virtual DOM usage, helpers, and rendering patterns in Lichess
+---
+
+Lichess uses **Snabbdom** as its virtual DOM library for efficient UI rendering. Snabbdom provides a simple, performant API for creating and patching DOM elements.
+
+## Why Snabbdom?
+
+- **Lightweight** - ~200 lines of core code
+- **Fast** - Efficient diffing algorithm
+- **Simple** - Straightforward API
+- **Extensible** - Module system for features
+- **Type-safe** - Excellent TypeScript support
+
+## Version
+
+Lichess uses Snabbdom 3.5.1:
+
+```json
+// package.json
+{
+  "dependencies": {
+    "snabbdom": "3.5.1"
+  },
+  "//": [
+    "snabbdom pinned to 3.5.1 until https://github.com/snabbdom/snabbdom/issues/1114 is resolved"
+  ]
+}
+```
+
+## Core API
+
+### h Function
+
+Creates virtual nodes:
+
+```typescript
+import { h, type VNode } from 'snabbdom';
+
+// Element with text
+h('div', 'Hello World')
+
+// Element with children
+h('div', [
+  h('h1', 'Title'),
+  h('p', 'Paragraph'),
+])
+
+// Element with data
+h('button', {
+  attrs: { type: 'submit' },
+  class: { primary: true },
+  on: { click: handleClick },
+}, 'Submit')
+
+// Full signature
+interface VNode {
+  sel: string | undefined;        // Selector
+  data: VNodeData | undefined;     // Attributes, classes, etc.
+  children: VNodeChildren;         // Child nodes
+  elm: Node | undefined;           // Real DOM element
+  text: string | undefined;        // Text content
+  key: string | number | undefined; // Unique key
+}
+```
+
+### VNodeData
+
+Data attached to virtual nodes:
+
+```typescript
+interface VNodeData {
+  attrs?: Record<string, string | number | boolean>;
+  class?: Record<string, boolean>;
+  on?: Record<string, EventListener>;
+  hook?: Hooks;
+  key?: string | number;
+  style?: Record<string, string>;
+  dataset?: Record<string, string>;
+}
+```
+
+Example:
+
+```typescript
+h('a', {
+  attrs: {
+    href: '/games',
+    'data-icon': 'q',
+  },
+  class: {
+    'active': isActive,
+    'disabled': !enabled,
+  },
+  on: {
+    click: (e) => {
+      e.preventDefault();
+      navigate('/games');
+    },
+  },
+}, 'Games')
+```
+
+## Lichess Helpers
+
+Lichess provides enhanced helpers in `lib/view`:
+
+### hl Function
+
+Filters out boolean and undefined values:
+
+```typescript
+import { hl, type VNode } from 'lib/view';
+
+// Conditional rendering without explicit checks
+hl('div.options', [
+  enabled && hl('span', 'Enabled option'),    // Only if enabled
+  premium && hl('span.premium', 'Premium'),   // Only if premium
+  hl('span', 'Always shown'),                 // Always shown
+  false && hl('span', 'Never shown'),         // Never shown
+])
+
+// Nested conditionals
+hl('div', [
+  hasFeatures && [
+    hl('h3', 'Features'),
+    feature1 && hl('li', 'Feature 1'),
+    feature2 && hl('li', 'Feature 2'),
+  ],
+])
+```
+
+### onInsert Hook
+
+Executes code when an element is inserted:
+
+```typescript
+import { onInsert } from 'lib/view';
+import { Chessground } from '@lichess-org/chessground';
+
+hl('div.board', {
+  hook: onInsert<HTMLElement>(el => {
+    // Initialize chessboard
+    const board = Chessground(el, {
+      fen: '...',
+      orientation: 'white',
+    });
+  }),
+})
+```
+
+### bind Hook
+
+Attaches event listeners with redraw:
+
+```typescript
+import { bind, bindNonPassive } from 'lib/view';
+
+// Passive event (default)
+hl('div.scrollable', {
+  hook: bind('scroll', (e) => {
+    console.log('scrolled', e.target.scrollTop);
+  }, redraw),
+})
+
+// Non-passive event (can preventDefault)
+hl('form', {
+  hook: bindNonPassive('submit', (e) => {
+    e.preventDefault();
+    submitForm();
+  }, redraw),
+})
+```
+
+### bindSubmit Hook
+
+Convenience for form submission:
+
+```typescript
+import { bindSubmit } from 'lib/view';
+
+hl('form', {
+  hook: bindSubmit(e => {
+    // e.preventDefault() already called
+    const formData = new FormData(e.target as HTMLFormElement);
+    submitForm(formData);
+  }, redraw),
+}, [
+  hl('input', { attrs: { name: 'username' } }),
+  hl('button', { attrs: { type: 'submit' } }, 'Submit'),
+])
+```
+
+### Icon Helpers
+
+```typescript
+import { dataIcon, iconTag } from 'lib/view';
+import * as licon from 'lib/licon';
+
+// Icon as attribute
+hl('button', {
+  attrs: dataIcon(licon.Checkmark),
+}, 'Save')
+
+// Icon as element
+hl('div', [
+  iconTag(licon.Gear),
+  hl('span', 'Settings'),
+])
+```
+
+## Hooks
+
+Snabbdom provides lifecycle hooks:
+
+```typescript
+interface Hooks {
+  pre?: () => void;                    // Before patch
+  init?: (vNode: VNode) => void;       // vNode created
+  create?: (emptyVNode: VNode, vNode: VNode) => void;  // Element created
+  insert?: (vNode: VNode) => void;     // Element inserted
+  prepatch?: (oldVNode: VNode, vNode: VNode) => void;  // Before element patched
+  update?: (oldVNode: VNode, vNode: VNode) => void;    // Element updated
+  postpatch?: (oldVNode: VNode, vNode: VNode) => void; // After element patched
+  destroy?: (vNode: VNode) => void;    // Before removal
+  remove?: (vNode: VNode, removeCallback: () => void) => void; // Element removed
+  post?: () => void;                   // After patch
+}
+```
+
+### Common Hook Patterns
+
+```typescript
+// Initialize on insert
+hl('div', {
+  hook: {
+    insert: (vNode) => {
+      const el = vNode.elm as HTMLElement;
+      initializeComponent(el);
+    },
+  },
+})
+
+// Cleanup on destroy
+hl('div', {
+  hook: {
+    insert: (vNode) => {
+      const el = vNode.elm as HTMLElement;
+      const cleanup = initializeComponent(el);
+      (vNode.elm as any)._cleanup = cleanup;
+    },
+    destroy: (vNode) => {
+      const cleanup = (vNode.elm as any)._cleanup;
+      if (cleanup) cleanup();
+    },
+  },
+})
+
+// Animate removal
+hl('div', {
+  hook: {
+    remove: (vNode, removeCallback) => {
+      const el = vNode.elm as HTMLElement;
+      el.style.transition = 'opacity 0.3s';
+      el.style.opacity = '0';
+      setTimeout(removeCallback, 300);
+    },
+  },
+})
+```
+
+## Thunks
+
+Thunks optimize rendering by skipping unchanged components:
+
+```typescript
+import { thunk, type VNode } from 'snabbdom';
+
+// Thunk only re-renders if args change
+function renderPlayer(ctrl: Ctrl, player: Player): VNode {
+  return hl('div.player', [
+    hl('span.name', player.name),
+    hl('span.rating', String(player.rating)),
+  ]);
+}
+
+// Usage
+thunk('div.player', renderPlayer, [ctrl, ctrl.player])
+
+// Only re-renders when ctrl.player reference changes
+```
+
+### Thunk Keys
+
+Use keys for lists:
+
+```typescript
+hl('div.players', 
+  players.map(player =>
+    thunk(`player-${player.id}`, renderPlayer, [ctrl, player], player.id)
+  )
+)
+```
+
+## Patching
+
+Update the DOM by patching:
+
+```typescript
+import { init, type VNode } from 'snabbdom';
+import { attributesModule } from 'snabbdom/modules/attributes';
+import { classModule } from 'snabbdom/modules/class';
+import { eventListenersModule } from 'snabbdom/modules/eventlisteners';
+
+// Create patch function with modules
+const patch = init([
+  attributesModule,
+  classModule,
+  eventListenersModule,
+]);
+
+// Initial render
+const container = document.getElementById('app');
+let vnode = view(ctrl);
+patch(container, vnode);
+
+// Update render
+function redraw() {
+  const newVnode = view(ctrl);
+  vnode = patch(vnode, newVnode);
+}
+```
+
+## Real-World Examples
+
+### Analysis Board View
+
+```typescript
+// ui/analyse/src/view/main.ts
+import { hl, onInsert, type VNode } from 'lib/view';
+import type AnalyseCtrl from '../ctrl';
+
+export default function analyseView(ctrl: AnalyseCtrl): VNode {
+  return hl('main.analyse', [
+    renderBoard(ctrl),
+    renderTools(ctrl),
+    renderControls(ctrl),
+    renderUnderboard(ctrl),
+    ctrl.keyboardMove && renderKeyboardMove(ctrl.keyboardMove),
+  ]);
+}
+
+function renderBoard(ctrl: AnalyseCtrl): VNode {
+  return hl('div.analyse__board.main-board', {
+    hook: onInsert<HTMLElement>(el => {
+      ctrl.chessground = Chessground(el, ctrl.makeChessgroundConfig());
+      ctrl.setAutoShapes();
+    }),
+  });
+}
+
+function renderTools(ctrl: AnalyseCtrl): VNode {
+  return hl('div.analyse__tools', [
+    ctrl.explorer.enabled() && renderExplorer(ctrl),
+    ctrl.ceval.enabled() && renderEvaluation(ctrl),
+    renderMoveList(ctrl),
+  ]);
+}
+```
+
+### Chat Component
+
+```typescript
+// ui/lib/src/chat/discussion.ts
+import { h, thunk, type VNode } from 'snabbdom';
+import type { ChatCtrl } from './chatCtrl';
+
+export function renderChat(ctrl: ChatCtrl): VNode {
+  return h('section.mchat', [
+    renderHeader(ctrl),
+    renderMessages(ctrl),
+    renderInput(ctrl),
+  ]);
+}
+
+function renderMessages(ctrl: ChatCtrl): VNode {
+  return h('ol.mchat__messages', {
+    hook: {
+      insert: scrollToBottom,
+      postpatch: (oldVnode, vnode) => {
+        if (ctrl.shouldScroll) scrollToBottom(vnode);
+      },
+    },
+  }, ctrl.lines.map(line => thunk(
+    `line-${line.u}-${line.t}`,
+    renderLine,
+    [ctrl, line],
+  )));
+}
+
+function renderLine(ctrl: ChatCtrl, line: Line): VNode {
+  return h('li', [
+    h('span.user', line.u),
+    h('span.text', line.t),
+  ]);
+}
+```
+
+### Form with Validation
+
+```typescript
+import { hl, bindSubmit, bind } from 'lib/view';
+import type { FormCtrl } from './formCtrl';
+
+function renderForm(ctrl: FormCtrl): VNode {
+  return hl('form', {
+    hook: bindSubmit(ctrl.submit, ctrl.redraw),
+  }, [
+    renderField(ctrl, 'username', 'Username'),
+    renderField(ctrl, 'email', 'Email'),
+    hl('button.submit', {
+      attrs: { type: 'submit', disabled: !ctrl.valid() },
+    }, 'Submit'),
+  ]);
+}
+
+function renderField(
+  ctrl: FormCtrl,
+  name: string,
+  label: string,
+): VNode {
+  const error = ctrl.errors[name];
+  return hl('div.form-group', {
+    class: { error: !!error },
+  }, [
+    hl('label', { attrs: { for: name } }, label),
+    hl('input', {
+      attrs: {
+        id: name,
+        name,
+        value: ctrl.values[name],
+      },
+      hook: bind('input', (e) => {
+        ctrl.updateField(name, (e.target as HTMLInputElement).value);
+      }, ctrl.redraw),
+    }),
+    error && hl('span.error', error),
+  ]);
+}
+```
+
+## Performance Tips
+
+### Use Keys for Lists
+
+```typescript
+// Without keys - inefficient
+hl('ul', items.map(item => hl('li', item.name)))
+
+// With keys - efficient
+hl('ul', items.map(item => 
+  hl('li', { key: item.id }, item.name)
+))
+```
+
+### Use Thunks for Expensive Components
+
+```typescript
+// Always re-renders
+hl('div', expensiveRender(data))
+
+// Only re-renders when data changes
+thunk('div', expensiveRender, [data])
+```
+
+### Avoid Anonymous Functions in render
+
+```typescript
+// Bad - creates new function every render
+hl('button', {
+  on: { click: () => ctrl.submit() },
+})
+
+// Good - stable function reference
+hl('button', {
+  on: { click: ctrl.submit },
+})
+```
+
+## Next Steps
+
+- [UI Components](/frontend/ui-components) - Component patterns and utilities
+- [Build System](/frontend/build-system) - How code is bundled
+- [Frontend Overview](/frontend/overview) - Architecture overview

@@ -1,0 +1,191 @@
+---
+title: Introduction to Lichess
+description: Learn about Lichess - a free, open-source online chess platform serving millions of players worldwide
+---
+
+# Welcome to Lichess
+
+Lichess (li[chess in sca]la) is a free, open-source online chess game server focused on [realtime](https://lichess.org/games) gameplay and ease of use. With over 4.7 billion games stored and analyzed, Lichess is one of the world's largest chess platforms.
+
+<Note>
+  Lichess is completely free and ad-free, funded by user donations. All rated games are published in a free PGN database.
+</Note>
+
+## What is Lichess?
+
+Lichess provides a comprehensive chess platform with features ranging from casual play to professional analysis tools. The platform serves millions of players worldwide and offers:
+
+- **Real-time gameplay** with WebSocket-based connections
+- **Computer analysis** powered by Stockfish distributed across donated servers
+- **Educational tools** including puzzles, lessons, and coordinate training
+- **Community features** like tournaments, teams, forums, and broadcasts
+- **Complete transparency** - all code is open source under AGPL-3.0
+
+## Core Features
+
+<CardGroup cols={2}>
+  <Card title="Game Modes" icon="chess">
+    Play casual, rated, or correspondence games across multiple chess variants including Standard, Chess960, Crazyhouse, and more.
+  </Card>
+  
+  <Card title="Computer Analysis" icon="microchip">
+    Free cloud analysis powered by Stockfish, distributed through the [fishnet](https://github.com/lichess-org/fishnet) network of volunteer servers.
+  </Card>
+  
+  <Card title="Puzzles & Training" icon="puzzle-piece">
+    Access millions of chess puzzles generated from real games, with personalized difficulty and themed training.
+  </Card>
+  
+  <Card title="Tournaments & Events" icon="trophy">
+    Join arena tournaments, Swiss tournaments, or simultaneous exhibitions with players from around the world.
+  </Card>
+  
+  <Card title="Studies & Analysis" icon="book">
+    Create and share chess studies with collaborative analysis boards and PGN import/export.
+  </Card>
+  
+  <Card title="Broadcast & Relay" icon="tower-broadcast">
+    Follow professional tournaments with live game broadcasts and commentary.
+  </Card>
+</CardGroup>
+
+## Technology Stack
+
+Lichess is built with modern, scalable technologies:
+
+### Backend
+
+- **Language**: [Scala 3](https://www.scala-lang.org/) - a modern, type-safe functional programming language
+- **Framework**: [Play 2.8](https://www.playframework.com/) - reactive web framework
+- **Database**: [MongoDB](https://www.mongodb.com) - storing over 4.7 billion games
+- **Search**: [Elasticsearch](https://github.com/elastic/elasticsearch) - indexing games and content
+- **Caching**: Redis, Caffeine, and Scaffeine for distributed and in-memory caching
+- **Async Processing**: Akka streams and Scala Futures for fully asynchronous operation
+
+```scala
+// Example: The main entry point (app/Lila.scala:18)
+object Lila:
+  def main(args: Array[String]): Unit =
+    lila.web.PlayServer.start(args): env =>
+      LilaComponents(
+        env,
+        DefaultApplicationLifecycle(),
+        Configuration.load(env)
+      ).application
+```
+
+### Frontend
+
+- **Language**: [TypeScript](https://www.typescriptlang.org/) for type-safe client code
+- **UI Framework**: [snabbdom](https://github.com/snabbdom/snabbdom) - lightweight virtual DOM
+- **Styling**: [Sass](https://sass-lang.com/) for CSS generation
+- **Chess UI**: [@lichess-org/chessground](https://github.com/lichess-org/chessground) - custom chessboard component
+
+```json
+// Core frontend dependencies (package.json)
+{
+  "dependencies": {
+    "@lichess-org/chessground": "^10.0.2",
+    "@lichess-org/pgn-viewer": "^2.5.9",
+    "chessops": "^0.15",
+    "snabbdom": "3.5.1",
+    "typescript": "^5.9.3"
+  }
+}
+```
+
+### Chess Logic
+
+- **Core Engine**: [scalachess](https://github.com/lichess-org/scalachess) - pure chess logic in Scala
+- **Analysis**: [Stockfish](https://stockfishchess.org/) via fishnet cluster
+- **Templating**: [scalatags](https://com-lihaoyi.github.io/scalatags/) for type-safe HTML
+
+## Modular Architecture
+
+Lichess uses a modular monolith architecture with 80+ modules (build.sbt:60-86):
+
+```scala
+// Module dependency hierarchy
+lazy val modules = Seq(
+  // Level 1 - Foundation
+  core, coreI18n,
+  // Level 2 - UI & Common utilities  
+  ui, common, tree,
+  // Level 3 - Infrastructure
+  db, room, search,
+  // Level 4 - Core services
+  memo, rating,
+  // Level 5 - Domain modules
+  game, gathering, study, user, puzzle, analyse,
+  report, pref, chat, playban, lobby, mailer, oauth,
+  // Level 6+ - Feature modules
+  tournament, round, swiss, relay, team, forum,
+  // ... and many more
+)
+```
+
+Each module is independently testable with clear dependency boundaries. The modular structure is reflected in the `modules/` directory with 85 separate subprojects.
+
+## Internationalization
+
+The UI is available in **over 140 languages** thanks to community contributions via [Crowdin](https://crowdin.com/project/lichess).
+
+```scala
+// Translation databases (build.sbt:126)
+val dbs = "activity appeal arena broadcast challenge class coach contact 
+  coordinates dgt emails faq features insight keyboardMove lag learn 
+  nvui oauthScope onboarding patron perfStat preferences puzzle 
+  puzzleTheme recap search settings site streamer storm study swiss 
+  team timeago tfa tourname ublog variant video voiceCommands".split(' ')
+```
+
+## Performance & Scale
+
+<CardGroup cols={3}>
+  <Card title="4.7B+ Games" icon="database">
+    Stored in MongoDB, all freely accessible
+  </Card>
+  
+  <Card title="Fully Async" icon="bolt">
+    Non-blocking I/O with Akka streams
+  </Card>
+  
+  <Card title="Real-time" icon="gauge-high">
+    WebSocket connections via lila-ws
+  </Card>
+</CardGroup>
+
+## Open Source
+
+Lichess is licensed under the **GNU Affero General Public License 3** (AGPL-3.0), ensuring it remains free and open forever.
+
+- **Source Code**: [github.com/lichess-org/lila](https://github.com/lichess-org/lila)
+- **Related Projects**: See [lichess.org/source](https://lichess.org/source) for all repositories
+- **Database**: [database.lichess.org](https://database.lichess.org) - free PGN downloads
+- **API**: [lichess.org/api](https://lichess.org/api) - full REST and streaming APIs
+
+## Community
+
+Join the Lichess developer community:
+
+<CardGroup cols={2}>
+  <Card title="Discord" icon="discord" href="https://discord.gg/lichess">
+    Chat with developers and contributors
+  </Card>
+  
+  <Card title="GitHub" icon="github" href="https://github.com/lichess-org/lila">
+    Contribute code and report issues
+  </Card>
+  
+  <Card title="Forum" icon="comments" href="https://lichess.org/forum">
+    Discuss features and get help
+  </Card>
+  
+  <Card title="Crowdin" icon="language" href="https://crowdin.com/project/lichess">
+    Help translate Lichess
+  </Card>
+</CardGroup>
+
+<Note>
+  Ready to start developing? Check out the [Quickstart Guide](/quickstart) to set up your local development environment.
+</Note>

@@ -1,0 +1,617 @@
+---
+title: TV & Streaming API
+description: Endpoints for accessing live games, TV channels, and streaming game data
+---
+
+## Get TV Channels
+
+Get the current games being featured on all TV channels.
+
+```bash
+GET /api/tv/channels
+```
+
+<ResponseExample>
+```json
+{
+  "Bot": {
+    "user": {
+      "name": "Bot1",
+      "id": "bot1",
+      "title": "BOT"
+    },
+    "rating": 2800,
+    "gameId": "abcd1234"
+  },
+  "Blitz": {
+    "user": {
+      "name": "Player1",
+      "id": "player1"
+    },
+    "rating": 2750,
+    "gameId": "efgh5678"
+  },
+  "Racing Kings": {
+    "user": {
+      "name": "Player2",
+      "id": "player2"
+    },
+    "rating": 2100,
+    "gameId": "ijkl9012"
+  },
+  "UltraBullet": {
+    "user": {
+      "name": "Player3",
+      "id": "player3"
+    },
+    "rating": 2650,
+    "gameId": "mnop3456"
+  },
+  "Bullet": { },
+  "Classical": { },
+  "Rapid": { },
+  "Three-check": { },
+  "Antichess": { },
+  "Computer": { },
+  "Horde": { },
+  "Atomic": { },
+  "Crazyhouse": { },
+  "Chess960": { },
+  "King of the Hill": { },
+  "Top Rated": { }
+}
+```
+</ResponseExample>
+
+Available channels:
+- `Best` - Top rated games
+- `Bullet` - Bullet games (< 3 min)
+- `Blitz` - Blitz games (3-8 min)
+- `Rapid` - Rapid games (8-25 min)
+- `Classical` - Classical games (25+ min)
+- `UltraBullet` - Ultra bullet games (< 30 sec)
+- `Bot` - Bot games
+- `Computer` - Computer analysis
+- Variant channels: `Chess960`, `Crazyhouse`, `Antichess`, `Atomic`, `Horde`, `King of the Hill`, `Racing Kings`, `Three-check`
+
+## Get Current TV Game
+
+Get the current game being shown on Lichess TV (Best channel).
+
+```bash
+GET /tv/feed
+```
+
+Returns NDJSON stream with game updates.
+
+<ResponseExample>
+```json Update Event
+{
+  "t": "featured",
+  "d": {
+    "id": "abcd1234",
+    "orientation": "white",
+    "players": [
+      {
+        "color": "white",
+        "user": {
+          "name": "Player1",
+          "id": "player1",
+          "title": "GM"
+        },
+        "rating": 2800
+      },
+      {
+        "color": "black",
+        "user": {
+          "name": "Player2",
+          "id": "player2",
+          "title": "IM"
+        },
+        "rating": 2750
+      }
+    ]
+  }
+}
+```
+</ResponseExample>
+
+<CodeGroup>
+```bash NDJSON Stream
+curl https://lichess.org/api/tv/feed
+```
+
+```bash Server-Sent Events
+curl "https://lichess.org/tv/feed?bc=true"
+```
+</CodeGroup>
+
+## Get TV Channel Feed
+
+Stream games from a specific TV channel.
+
+```bash
+GET /api/tv/{channel}/feed
+```
+
+<ParamField path="channel" type="string" required>
+  Channel name (e.g., `blitz`, `rapid`, `classical`)
+</ParamField>
+
+Returns NDJSON stream with game updates for the specified channel.
+
+<CodeGroup>
+```bash cURL
+curl https://lichess.org/api/tv/blitz/feed
+```
+</CodeGroup>
+
+## Get TV Channel Games
+
+Get recent games from a TV channel.
+
+```bash
+GET /api/tv/{channel}
+```
+
+<ParamField path="channel" type="string" required>
+  Channel name
+</ParamField>
+
+<ParamField query="nb" type="integer" default="10">
+  Number of games to fetch (1-30)
+</ParamField>
+
+<ParamField query="moves" type="boolean" default="true">
+  Include game moves
+</ParamField>
+
+<ParamField query="tags" type="boolean" default="true">
+  Include PGN tags
+</ParamField>
+
+<ParamField query="clocks" type="boolean" default="false">
+  Include clock times
+</ParamField>
+
+<ParamField query="opening" type="boolean" default="false">
+  Include opening information
+</ParamField>
+
+Returns games in PGN or NDJSON format.
+
+<CodeGroup>
+```bash PGN Format
+curl https://lichess.org/api/tv/blitz \
+  -H "Accept: application/x-chess-pgn"
+```
+
+```bash NDJSON Format  
+curl "https://lichess.org/api/tv/rapid?nb=20"
+```
+</CodeGroup>
+
+## Streaming Endpoints
+
+### Get Featured Streamers
+
+Get list of streamers currently live.
+
+```bash
+GET /api/streamer/live
+```
+
+<ResponseExample>
+```json
+[
+  {
+    "id": "streamer1",
+    "name": "Streamer1",
+    "title": "GM",
+    "patron": true,
+    "stream": {
+      "service": "twitch",
+      "status": "Playing Blitz Arena",
+      "lang": "en"
+    }
+  },
+  {
+    "id": "streamer2",
+    "name": "Streamer2",
+    "stream": {
+      "service": "youtube",
+      "status": "Titled Tuesday",
+      "lang": "es"
+    }
+  }
+]
+```
+</ResponseExample>
+
+<ResponseField name="id" type="string">
+  Lichess user ID
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Display name
+</ResponseField>
+
+<ResponseField name="title" type="string">
+  FIDE title (if any)
+</ResponseField>
+
+<ResponseField name="patron" type="boolean">
+  Whether user is a patron
+</ResponseField>
+
+<ResponseField name="stream.service" type="string">
+  Streaming service: `twitch` or `youtube`
+</ResponseField>
+
+<ResponseField name="stream.status" type="string">
+  Current stream title/status
+</ResponseField>
+
+<ResponseField name="stream.lang" type="string">
+  Stream language code
+</ResponseField>
+
+### Get Featured Streamers (Spotlight)
+
+Get featured/spotlighted streamers.
+
+```bash
+GET /api/streamer/featured
+```
+
+Returns a subset of live streamers chosen for featuring.
+
+## Broadcast Endpoints
+
+### Get Live Broadcasts
+
+Get currently active broadcasts (relay tournaments).
+
+```bash
+GET /api/broadcast
+```
+
+<ParamField query="nb" type="integer" default="20">
+  Number of broadcasts to return (max 100)
+</ParamField>
+
+<ResponseExample>
+```json
+[
+  {
+    "tour": {
+      "id": "tour123",
+      "name": "World Championship 2023",
+      "slug": "world-championship-2023",
+      "description": "Official world championship broadcast"
+    },
+    "rounds": [
+      {
+        "id": "round123",
+        "name": "Round 1",
+        "slug": "round-1",
+        "startsAt": 1658931600000,
+        "status": "live"
+      }
+    ]
+  }
+]
+```
+</ResponseExample>
+
+### Get Top Broadcasts
+
+Get top/popular broadcasts.
+
+```bash
+GET /api/broadcast/top
+```
+
+<ParamField query="page" type="integer" default="1">
+  Page number
+</ParamField>
+
+### Search Broadcasts
+
+Search for broadcasts.
+
+```bash
+GET /api/broadcast/search
+```
+
+<ParamField query="q" type="string" required>
+  Search query
+</ParamField>
+
+<ParamField query="page" type="integer" default="1">
+  Page number
+</ParamField>
+
+### Get Broadcast by ID
+
+Get details of a specific broadcast tour.
+
+```bash
+GET /api/broadcast/{tourId}
+```
+
+<ParamField path="tourId" type="string" required>
+  8-character tour ID
+</ParamField>
+
+### Get Broadcast Round
+
+Get details of a specific broadcast round.
+
+```bash
+GET /api/broadcast/{ts}/{rs}/{roundId}
+```
+
+<ParamField path="ts" type="string" required>
+  Tour slug
+</ParamField>
+
+<ParamField path="rs" type="string" required>
+  Round slug
+</ParamField>
+
+<ParamField path="roundId" type="string" required>
+  8-character round ID
+</ParamField>
+
+### Stream Broadcast Round
+
+Stream moves from a broadcast round in real-time.
+
+```bash
+GET /api/stream/broadcast/round/{roundId}.pgn
+```
+
+<ParamField path="roundId" type="string" required>
+  Round ID
+</ParamField>
+
+Returns PGN stream with real-time updates as games progress.
+
+### Export Broadcast Games
+
+Export all games from a broadcast.
+
+```bash
+GET /api/broadcast/{tourId}.pgn
+```
+
+<ParamField path="tourId" type="string" required>
+  Tour ID
+</ParamField>
+
+Returns all games from all rounds in PGN format.
+
+### Get Broadcasts by User
+
+Get broadcasts created by a user.
+
+```bash
+GET /api/broadcast/by/{username}
+```
+
+<ParamField path="username" type="string" required>
+  Username
+</ParamField>
+
+<ParamField query="page" type="integer" default="1">
+  Page number
+</ParamField>
+
+### Get My Broadcast Rounds
+
+Get broadcast rounds managed by the authenticated user.
+
+```bash
+GET /api/broadcast/my-rounds
+```
+
+Requires authentication. Returns rounds where you have admin/contributor access.
+
+### Push Broadcast Updates
+
+Push game updates to a broadcast round.
+
+```bash
+POST /api/broadcast/round/{roundId}/push
+```
+
+<ParamField path="roundId" type="string" required>
+  Round ID
+</ParamField>
+
+<ParamField body="pgn" type="string" required>
+  PGN of games to update
+</ParamField>
+
+Requires appropriate permissions for the broadcast.
+
+### Reset Broadcast Round
+
+Reset a broadcast round (clear all games).
+
+```bash
+POST /api/broadcast/round/{roundId}/reset
+```
+
+<ParamField path="roundId" type="string" required>
+  Round ID
+</ParamField>
+
+Requires admin permissions.
+
+## Current Games
+
+Get current games being played.
+
+```bash
+GET /api/account/playing
+```
+
+Requires authentication. Returns games the authenticated user is currently playing.
+
+<ResponseExample>
+```json
+{
+  "nowPlaying": [
+    {
+      "fullId": "abcd1234efgh",
+      "gameId": "abcd1234",
+      "fen": "rnbqkb1r/pppp1ppp/5n2/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 4 3",
+      "color": "white",
+      "lastMove": "g8f6",
+      "variant": {
+        "key": "standard",
+        "name": "Standard"
+      },
+      "speed": "blitz",
+      "perf": "blitz",
+      "rated": true,
+      "opponent": {
+        "id": "opponent",
+        "username": "Opponent",
+        "rating": 1800
+      },
+      "isMyTurn": true,
+      "secondsLeft": 180
+    }
+  ]
+}
+```
+</ResponseExample>
+
+## Event Stream
+
+Stream personal events (incoming challenges, game starts, etc.).
+
+```bash
+GET /api/stream/event
+```
+
+Requires `bot:play`, `board:play`, or `challenge:read` OAuth scope.
+
+Returns NDJSON stream of events:
+
+<ResponseExample>
+```json Game Start Event
+{
+  "type": "gameStart",
+  "game": {
+    "fullId": "abcd1234efgh",
+    "gameId": "abcd1234",
+    "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    "color": "white",
+    "lastMove": "",
+    "source": "lobby",
+    "status": {
+      "id": 20,
+      "name": "started"
+    },
+    "variant": {
+      "key": "standard",
+      "name": "Standard"
+    },
+    "speed": "blitz",
+    "perf": "blitz",
+    "rated": true,
+    "compat": {
+      "bot": false,
+      "board": true
+    },
+    "opponent": {
+      "id": "opponent",
+      "username": "Opponent",
+      "rating": 1800
+    },
+    "isMyTurn": true
+  }
+}
+```
+
+```json Challenge Event
+{
+  "type": "challenge",
+  "challenge": {
+    "id": "chal123",
+    "status": "created",
+    "challenger": {
+      "id": "challenger",
+      "name": "Challenger",
+      "rating": 1850,
+      "title": "FM"
+    },
+    "destUser": {
+      "id": "me",
+      "name": "Me",
+      "rating": 1800
+    },
+    "variant": {
+      "key": "standard",
+      "name": "Standard"
+    },
+    "rated": true,
+    "speed": "blitz",
+    "timeControl": {
+      "type": "clock",
+      "limit": 180,
+      "increment": 2
+    },
+    "color": "random",
+    "perf": {
+      "name": "Blitz"
+    }
+  }
+}
+```
+</ResponseExample>
+
+Event types include:
+- `gameStart` - A game you're playing has started
+- `gameFinish` - A game you were playing has finished
+- `challenge` - You have been challenged
+- `challengeCanceled` - A challenge was canceled
+- `challengeDeclined` - A challenge was declined
+
+<Warning>
+  Do not poll this endpoint. Keep the connection open to receive events in real-time.
+</Warning>
+
+## Response Fields
+
+<ResponseField name="gameId" type="string">
+  8-character game ID
+</ResponseField>
+
+<ResponseField name="fullId" type="string">
+  12-character full game ID (includes player secret)
+</ResponseField>
+
+<ResponseField name="fen" type="string">
+  Current position in FEN notation
+</ResponseField>
+
+<ResponseField name="color" type="string">
+  Your color in the game: `white` or `black`
+</ResponseField>
+
+<ResponseField name="lastMove" type="string">
+  Last move in UCI format
+</ResponseField>
+
+<ResponseField name="isMyTurn" type="boolean">
+  Whether it's your turn to move
+</ResponseField>
+
+<ResponseField name="secondsLeft" type="integer">
+  Seconds remaining on your clock
+</ResponseField>

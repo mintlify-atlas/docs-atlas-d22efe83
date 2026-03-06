@@ -1,0 +1,485 @@
+---
+title: Chat Module
+description: Real-time chat system for games, tournaments, and studies
+---
+
+The **chat** module provides real-time messaging for games, tournaments, studies, and other social features on Lichess.
+
+## Core Types
+
+### Chat Types
+
+From `modules/chat/src/main/Chat.scala`:
+
+```scala
+sealed trait AnyChat:
+  def id: ChatId
+  def lines: List[Line]
+  val loginRequired: Boolean
+  def forMe(using Option[Me], AllMessages): AnyChat
+  def isEmpty = lines.isEmpty
+  def userIds: Set[UserId]
+
+sealed trait Chat[L <: Line] extends AnyChat:
+  def id: ChatId
+  def lines: List[L]
+  def nonEmpty = lines.exists(_.isHuman)
+```
+
+### UserChat
+
+For tournaments, simuls (requires login):
+
+```scala
+case class UserChat(
+    id: ChatId,
+    lines: List[UserLine]
+) extends Chat[UserLine]:
+
+  val loginRequired = true
+
+  def forMe(using me: Option[Me], all: AllMessages): UserChat =
+    if all.yes || me.exists(_.marks.troll) then this
+    else copy(lines = lines.filterNot(_.troll))
+
+  def markDeleted(u: User) = copy(
+    lines = lines.map: l =>
+      if l.userId.is(u.id) then l.delete else l
+  )
+
+  def hasLinesOf(u: User) = lines.exists(_.userId == u.id)
+
+  def add(line: UserLine) = copy(lines = lines :+ line)
+
+  def mapLines(f: UserLine => UserLine) = copy(lines = lines.map(f))
+
+  def filterLines(f: UserLine => Boolean) = copy(lines = lines.filter(f))
+
+  def userIds = lines.view.map(_.userId).toSet
+
+  def truncate(max: Int) = copy(lines = lines.drop((lines.size - max).atLeast(0)))
+
+  def hasRecentLine(u: User): Boolean = 
+    lines.reverse.take(12).exists(_.userId == u.id)
+```
+
+### MixedChat
+
+For games (allows anonymous players):
+
+```scala
+case class MixedChat(
+    id: ChatId,
+    lines: List[Line]
+) extends Chat[Line]:
+
+  val loginRequired = false
+
+  def forMe(using me: Option[Me], all: AllMessages): MixedChat =
+    if all.yes || me.exists(_.marks.troll) then this
+    else
+      copy(lines = lines.filter:
+        case l: UserLine => !l.troll
+        case _: PlayerLine => true)
+
+  def mapLines(f: Line => Line) = copy(lines = lines.map(f))
+
+  def userIds = lines
+    .collect:
+      case l: UserLine => l.userId
+    .toSet
+```
+
+## Chat Lines
+
+From `modules/chat/src/main/Line.scala`:
+
+```scala
+// Base trait
+sealed trait Line:
+  def text: String
+  def isHuman: Boolean
+  def isSystem = !isHuman
+  def delete: Line
+
+// User message (logged-in user)
+case class UserLine(
+    username: UserName,
+    title: Option[PlayerTitle],
+    patron: Boolean,
+    text: String,
+    troll: Boolean,
+    deleted: Boolean
+) extends Line:
+  def isHuman = !deleted
+  def userId = username.id
+  def delete = copy(deleted = true)
+
+// Player message (anonymous in games)
+case class PlayerLine(
+    color: Color,
+    text: String
+) extends Line:
+  def isHuman = true
+  def delete = this  // Can't delete player lines
+
+// System message
+case class SystemLine(
+    text: String
+) extends Line:
+  def isHuman = false
+  def delete = this
+```
+
+## Chat API
+
+From `modules/chat/src/main/ChatApi.scala`:
+
+```scala
+final class ChatApi(
+    coll: Coll,
+    flood: lila.security.Flood,
+    spam: lila.security.Spam,
+    shutup: lila.hub.actors.Shutup,
+    cacheApi: lila.memo.CacheApi
+)(using Executor, Scheduler):
+  
+  def userChat: UserChatApi
+  def mixedChat: MixedChatApi
+  
+  // Get chat by ID
+  def find(chatId: ChatId): Fu[Option[AnyChat]]
+  
+  // Post message
+  def write(
+      chatId: ChatId,
+      userId: UserId,
+      text: String,
+      publicSource: Option[PublicSource],
+      busChan: BusChan.Select
+  ): Funit
+  
+  // Timeout user
+  def timeout(
+      chatId: ChatId,
+      modId: UserId,
+      suspect: UserStr,
+      reason: String,
+      text: String,
+      local: Boolean
+  ): Fu[Option[ChatTimeout.Cached]]
+  
+  // Delete line
+  def remove(chatId: ChatId, lineId: String): Funit
+  
+  // Mark user as troll (hide messages)
+  def setTroll(userId: UserId, v: Boolean): Funit
+```
+
+## Chat Setup
+
+```scala
+object Chat:
+  case class Setup(id: ChatId, publicSource: PublicSource)
+
+  def tournamentSetup(tourId: TourId) = 
+    Setup(tourId.into(ChatId), PublicSource.Tournament(tourId))
+  
+  def simulSetup(simulId: SimulId) = 
+    Setup(simulId.into(ChatId), PublicSource.Simul(simulId))
+```
+
+## Chat Contexts
+
+### Game Chat
+
+```scala
+case class Restricted(
+    chat: MixedChat, 
+    lines: JsonChatLines, 
+    restricted: Boolean  // Only presets available
+)
+
+case class GameOrEvent(either: Either[Restricted, (UserChat.Mine, PublicSource)]):
+  def game = either.left.toOption
+```
+
+### Tournament Chat
+
+```scala
+object UserChat:
+  case class Mine(
+      chat: UserChat, 
+      lines: JsonChatLines, 
+      timeout: Boolean,
+      locked: Boolean = false
+  ):
+    def truncate(max: Int) = copy(chat = chat.truncate(max))
+```
+
+## Chat Timeout
+
+From `modules/chat/src/main/ChatTimeout.scala`:
+
+```scala
+case class ChatTimeout(
+    chatId: ChatId,
+    userId: UserId,
+    reason: ChatTimeout.Reason,
+    createdAt: Instant,
+    expiresAt: Instant
+):
+  def isExpired = expiresAt.isBefore(nowInstant)
+  def remainingMinutes = ((expiresAt.toMillis - nowMillis) / 60000).toInt
+
+object ChatTimeout:
+  enum Reason:
+    case PublicShaming
+    case Offensive
+    case Spam
+    case Other
+  
+  case class Cached(
+      timeout: ChatTimeout,
+      remainingSeconds: Int
+  )
+```
+
+## Chat Moderation
+
+### Flood Protection
+
+```scala
+// From security module integration
+val flood: lila.security.Flood
+
+// Prevents rapid-fire messages
+flood.allowMessage(userId, text) match
+  case true => postMessage()
+  case false => fuccess(())  // Silently drop
+```
+
+### Spam Detection
+
+```scala
+val spam: lila.security.Spam
+
+spam.detect(text) match
+  case Some(spamType) => 
+    // Report user
+    // Don't post message
+  case None => 
+    postMessage()
+```
+
+### Shutup Integration
+
+```scala
+// Automatic toxicity detection
+val shutup: lila.hub.actors.Shutup
+
+shutup ! lila.hub.actorApi.shutup.RecordPublicChat(
+  userId = userId,
+  text = text,
+  source = publicSource
+)
+```
+
+## Chat Presets
+
+For quick messages:
+
+```scala
+object ChatPreset:
+  val options = List(
+    "Good luck!",
+    "Have fun!",
+    "You too!",
+    "Good game!",
+    "Well played!",
+    "Thank you!",
+    "I've got to go",
+    "Bye!"
+  )
+```
+
+## JSON View
+
+From `modules/chat/src/main/ChatJsonView.scala`:
+
+```scala
+final class ChatJsonView(
+    lightUserApi: lila.user.LightUserApi
+)(using Executor):
+  
+  def apply(
+      chat: AnyChat,
+      writeable: Boolean = true
+  )(using me: Option[Me]): Fu[JsObject] =
+    chat match
+      case user: UserChat => userChat(user, writeable)
+      case mixed: MixedChat => mixedChat(mixed, writeable)
+  
+  private def lineJson(line: Line): Fu[JsObject] = line match
+    case UserLine(username, title, patron, text, troll, deleted) =>
+      Json.obj(
+        "u" -> username,
+        "t" -> text,
+        "d" -> deleted.option(true)
+      )
+    case PlayerLine(color, text) =>
+      Json.obj(
+        "c" -> color.name,
+        "t" -> text
+      )
+    case SystemLine(text) =>
+      Json.obj("t" -> text)
+```
+
+## Channel Management
+
+```scala
+object Chat:
+  def chanOf(id: ChatId) = s"chat:$id"
+  
+  // WebSocket channels for real-time updates
+  // Format: "chat:<chatId>"
+```
+
+## Persistence
+
+```scala
+object BSONFields:
+  val id = "_id"
+  val lines = "l"
+  val winner = "w"      // For game chats
+  val createdAt = "ca"
+
+// Chats stored in MongoDB
+// Lines array limited to prevent huge documents
+// Old lines pruned when limit exceeded
+```
+
+## Chat Restrictions
+
+### Kid Mode
+
+```scala
+// Users in kid mode:
+// - Can only use presets
+// - Cannot see other users' messages
+// - Chat is restricted
+
+if user.kid then
+  Restricted(
+    chat = chat,
+    lines = emptyLines,
+    restricted = true
+  )
+```
+
+### Troll Mode
+
+```scala
+// Troll users:
+// - Messages only visible to other trolls
+// - Normal users don't see troll messages
+
+def forMe(using me: Option[Me], all: AllMessages): UserChat =
+  if all.yes || me.exists(_.marks.troll) then this
+  else copy(lines = lines.filterNot(_.troll))
+```
+
+### Rate Limiting
+
+```scala
+// Maximum lines per chat
+val maxLines = 200
+
+// Message frequency limits
+val floodDuration = 10.seconds
+val maxMessagesInWindow = 5
+
+// Character limits
+val maxLength = 140
+```
+
+## Chat Features by Context
+
+### Game Chat
+- Mixed (user + anonymous)
+- Presets available
+- Can be restricted
+- Linked to game result
+
+### Tournament Chat  
+- User only (login required)
+- Public channel
+- Moderated
+- Tournament announcements
+
+### Study Chat
+- User only
+- Permissions based on study settings
+- Can be disabled
+- Linked to study positions
+
+### Team Chat
+- User only (team members)
+- Persistent history
+- Team announcements
+- Moderated by team leaders
+
+## Real-time Updates
+
+Chat uses WebSocket for real-time messaging:
+
+```scala
+// Message published to channel
+bus.publish(
+  lila.core.socket.SendTo(
+    userId = userId,
+    message = Json.obj(
+      "t" -> "message",
+      "c" -> chatId,
+      "l" -> lineJson
+    )
+  ),
+  'chatOut
+)
+```
+
+## Performance
+
+1. **Caching** - Recent chats cached in memory
+2. **Truncation** - Limit lines per chat
+3. **Lazy loading** - Load on demand
+4. **Batch updates** - Group WebSocket sends
+5. **Indexed queries** - Fast chat lookup
+
+## Module Dependencies
+
+### Dependencies
+- **user** - User identification
+- **security** - Flood, spam detection
+- **db** - Chat persistence
+- **socket** - Real-time delivery
+- **shutup** - Toxicity detection
+
+### Dependents
+- **game** - Game chat
+- **tournament** - Tournament chat
+- **study** - Study chat
+- **team** - Team chat
+- **simul** - Simul chat
+
+## Related Modules
+
+<CardGroup cols={2}>
+  <Card title="Security Module" icon="shield" href="/modules/security">
+    Flood and spam protection
+  </Card>
+  <Card title="Shutup Module" icon="ban" href="/modules/shutup">
+    Automatic toxicity detection
+  </Card>
+</CardGroup>

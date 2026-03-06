@@ -1,0 +1,385 @@
+---
+title: UI Components
+description: Component structure, patterns, and shared utilities in the Lichess frontend
+---
+
+Lichess UI components are built using TypeScript and Snabbdom virtual DOM, organized into reusable modules with clear separation of concerns.
+
+## Core Modules
+
+### lib - Shared Utilities
+
+The `lib` package provides foundational utilities used across all UI modules:
+
+```typescript
+// ui/lib/src/index.ts exports:
+import {
+  prop,           // Observable property
+  toggle,         // Boolean toggle
+  debounce,       // Debounce function
+  throttle,       // Throttle function
+  defined,        // Type guard for non-null/undefined
+  requestIdleCallback,
+  type Prop,
+  type Toggle,
+} from 'lib';
+```
+
+#### Reactive Properties
+
+```typescript
+import { prop, type Prop } from 'lib';
+
+const count: Prop<number> = prop(0);
+console.log(count());      // 0
+count(5);                  // Set to 5
+console.log(count());      // 5
+
+const enabled: Toggle = toggle(false);
+enabled.toggle();          // Switch value
+enabled(true);             // Explicit set
+```
+
+#### Barrel Exports for Submodules
+
+```typescript
+import { CevalCtrl, type CevalOpts } from 'lib/ceval';
+import { TreeWrapper, makeTree, treeOps } from 'lib/tree';
+import { playable, playedTurns, fenToEpd } from 'lib/game';
+import { h, hl, type VNode, onInsert } from 'lib/view';
+```
+
+### bits - UI Components
+
+The `bits` package contains standalone UI components that can be loaded on demand:
+
+```typescript
+// ui/bits/package.json
+{
+  "build": {
+    "bundle": [
+      "src/bits!(*.inline).ts",
+      { "inline": "src/bits.oauth.inline.ts" }
+    ]
+  }
+}
+```
+
+Components in bits:
+- **Dialog systems** - Modal dialogs, confirm dialogs
+- **Form widgets** - Date pickers, autocomplete, tag inputs
+- **File handling** - Image cropping, file uploads
+- **Rich text** - Markdown editor, emoji picker
+- **Special features** - QR codes, confetti, voice chat
+
+Example component structure:
+
+```typescript
+// ui/bits/src/bits.captcha.ts
+import { requestIdleCallback } from 'lib';
+import { type VNode, h, hl, onInsert } from 'lib/view';
+
+export function initModule() {
+  // Module initialization logic
+  const element = document.querySelector('.captcha');
+  if (!element) return;
+  
+  // Create controller, render view
+  const ctrl = new CaptchaCtrl();
+  patch(element, view(ctrl));
+}
+```
+
+## View Helpers
+
+The `lib/view` module provides Snabbdom helpers:
+
+```typescript
+// ui/lib/src/view/snabbdom.ts
+import { h as snabH, thunk, type VNode } from 'snabbdom';
+
+// Enhanced h function with array filtering
+export function hl(
+  sel: string,
+  dataOrKids?: VNodeData | LooseVNodes,
+  kids?: LooseVNodes
+): VNode;
+
+// Hook helpers
+export function onInsert<A extends HTMLElement>(
+  f: (element: A) => void
+): Hooks;
+
+export function bind<K extends keyof GlobalEventHandlersEventMap>(
+  eventName: K,
+  f: (ev: GlobalEventHandlersEventMap[K]) => any,
+  redraw?: Redraw,
+  passive = true,
+): Hooks;
+
+export const bindSubmit = (
+  f: (e: SubmitEvent) => unknown,
+  redraw?: () => void
+): Hooks;
+
+// Icon helpers
+export const dataIcon = (icon: string): Attrs => ({
+  'data-icon': icon,
+});
+
+export const iconTag = (icon: string): VNode => 
+  snabH('i', { attrs: dataIcon(icon) });
+```
+
+### Usage Examples
+
+```typescript
+import { hl, onInsert, bind, dataIcon } from 'lib/view';
+import * as licon from 'lib/licon';
+
+// Simple element
+hl('div.container', 'Hello World')
+
+// With attributes
+hl('button', {
+  attrs: { type: 'submit', ...dataIcon(licon.Checkmark) },
+  hook: bind('click', () => console.log('clicked')),
+}, 'Submit')
+
+// Conditional rendering with array filtering
+hl('div.options', [
+  enabled && hl('span', 'Option 1'),
+  hasFeature && [
+    hl('span', 'Feature A'),
+    hl('span', 'Feature B'),
+  ],
+  hl('span', 'Always shown'),
+])
+
+// Element insertion hook
+hl('div.board', {
+  hook: onInsert((el: HTMLElement) => {
+    // Initialize board when element is inserted
+    const board = new Chessground(el, config);
+  }),
+})
+```
+
+## Component Patterns
+
+### Controller + View Pattern
+
+Most features use this separation:
+
+```typescript
+// controller.ts
+export class FeatureCtrl {
+  data: FeatureData;
+  enabled: Toggle;
+  redraw: () => void;
+  
+  constructor(opts: FeatureOpts, redraw: () => void) {
+    this.data = opts.data;
+    this.enabled = toggle(opts.enabled);
+    this.redraw = redraw;
+  }
+  
+  submit = () => {
+    // Handle submission
+    this.redraw();
+  };
+}
+
+// view.ts
+import { type VNode, hl, bindSubmit } from 'lib/view';
+import type { FeatureCtrl } from './controller';
+
+export function view(ctrl: FeatureCtrl): VNode {
+  return hl('div.feature', [
+    hl('h2', 'Feature Title'),
+    renderForm(ctrl),
+    ctrl.enabled() && renderContent(ctrl),
+  ]);
+}
+
+function renderForm(ctrl: FeatureCtrl): VNode {
+  return hl('form', {
+    hook: bindSubmit(e => ctrl.submit(), ctrl.redraw),
+  }, [
+    hl('input', { attrs: { type: 'text' } }),
+    hl('button', { attrs: { type: 'submit' } }, 'Submit'),
+  ]);
+}
+```
+
+### Sub-Controllers
+
+Complex features compose smaller controllers:
+
+```typescript
+// ui/analyse/src/ctrl.ts
+export default class AnalyseCtrl {
+  // Main state
+  data: AnalyseData;
+  tree: TreeWrapper;
+  socket: Socket;
+  chessground: ChessgroundApi;
+  
+  // Sub-controllers for specific features
+  autoplay: Autoplay;
+  explorer: ExplorerCtrl;
+  ceval: CevalCtrl;
+  forecast?: ForecastCtrl;
+  retro?: RetroCtrl;
+  practice?: PracticeCtrl;
+  study?: StudyCtrl;
+  
+  constructor(opts: AnalyseOpts, redraw: Redraw) {
+    // Initialize main state
+    this.data = opts.data;
+    this.tree = makeTree(treeReconstruct(opts.data.tree));
+    
+    // Initialize sub-controllers
+    this.autoplay = new Autoplay(this, redraw);
+    this.explorer = new ExplorerCtrl(this, opts.explorer, redraw);
+    this.ceval = new CevalCtrl(cevalOpts);
+    
+    // Conditional sub-controllers
+    if (opts.study) this.study = new StudyCtrl(this, opts.study);
+    if (opts.practice) this.practice = makePractice(this, opts.practice);
+  }
+}
+```
+
+### Thunks for Performance
+
+Use thunks to skip re-rendering unchanged components:
+
+```typescript
+import { thunk } from 'lib/view';
+
+// Only re-renders when ctrl.data.player changes
+thunk('div.player', view.player, [ctrl, ctrl.data.player])
+
+// Thunk function signature
+function player(ctrl: Ctrl, player: Player): VNode {
+  return hl('div.player', [
+    hl('span.name', player.name),
+    hl('span.rating', String(player.rating)),
+  ]);
+}
+```
+
+## Type Definitions
+
+Custom types are defined in `@types/lichess`:
+
+```typescript
+// ui/@types/lichess/index.d.ts
+declare namespace Site {
+  interface LoadBoardData {
+    fen: Fen;
+    orientation: Color;
+    coordinates?: boolean;
+  }
+  
+  interface Asset {
+    url(path: string, opts?: AssetOpts): string;
+    loadI18n(catalog: keyof I18n): Promise<void>;
+    loadCss(path: string): void;
+  }
+}
+
+interface Window {
+  site: Site;
+  lichess: LichessApi;
+  i18n: I18n;
+}
+```
+
+## Event Handling
+
+### Redraw Pattern
+
+Components receive a redraw function to trigger re-rendering:
+
+```typescript
+export class MyCtrl {
+  redraw: () => void;
+  
+  constructor(opts: Opts, redraw: () => void) {
+    this.redraw = redraw;
+  }
+  
+  onClick = () => {
+    // Update state
+    this.doSomething();
+    // Trigger re-render
+    this.redraw();
+  };
+}
+
+// In view
+hl('button', {
+  hook: bind('click', ctrl.onClick),
+}, 'Click me')
+```
+
+### Passive vs Non-Passive Events
+
+```typescript
+import { bind, bindNonPassive } from 'lib/view';
+
+// Passive (default) - better scroll performance
+hl('div', {
+  hook: bind('scroll', handleScroll, ctrl.redraw),
+})
+
+// Non-passive - can preventDefault
+hl('form', {
+  hook: bindNonPassive('submit', e => {
+    e.preventDefault();
+    ctrl.submit();
+  }, ctrl.redraw),
+})
+```
+
+## Async Operations
+
+### XHR Utilities
+
+```typescript
+import { json, text, form } from 'lib/xhr';
+
+// JSON request
+const result = await json('/api/endpoint', {
+  method: 'post',
+  body: JSON.stringify({ data }),
+});
+
+// Form submission
+await form('/api/submit', new FormData(formEl));
+```
+
+### Debouncing
+
+```typescript
+import { debounce } from 'lib';
+
+const search = debounce((query: string) => {
+  // Make API call
+}, 300);
+
+// In input handler
+hl('input', {
+  hook: bind('input', e => {
+    search((e.target as HTMLInputElement).value);
+  }),
+})
+```
+
+## Next Steps
+
+- [Build System](/frontend/build-system) - How components are bundled and optimized
+- [Snabbdom](/frontend/snabbdom) - Virtual DOM implementation details
+- [Frontend Overview](/frontend/overview) - Architecture and module organization

@@ -1,0 +1,374 @@
+---
+title: Tactical Puzzle Trainer
+description: Learn how Lichess's puzzle system works, from puzzle generation to rating algorithms and personalized training
+icon: puzzle-piece
+---
+
+## Overview
+
+Lichess offers over 3 million chess puzzles extracted from real games, all rated using a Glicko-2 rating system. The puzzles adapt to your skill level and provide comprehensive tactical training across various themes.
+
+## Puzzle Data Model
+
+```scala
+// modules/puzzle/src/main/Puzzle.scala:7
+case class Puzzle(
+    id: PuzzleId,
+    gameId: GameId,              // Source game
+    fen: Fen.Full,               // Starting position
+    line: NonEmptyList[Uci.Move], // Solution sequence
+    glicko: Glicko,              // Puzzle rating
+    plays: Int,                   // Times attempted
+    vote: Float,                  // Quality score (0-1)
+    themes: Set[PuzzleTheme.Key] // Tactical themes
+):
+  def initialPly: Ply = Fen.readPly(fen) | Ply.initial
+  
+  def color = !fen.colorOrWhite  // Side to move
+  
+  lazy val fenAfterInitialMove: Fen.Full =
+    boardAfterInitialMove.map(Fen.write)
+      .err(s"Can't apply puzzle $id first move")
+```
+
+### Puzzle Components
+
+- **FEN**: Position after opponent's move (your turn)
+- **Solution line**: Sequence of moves (you, opponent, you, etc.)
+- **Rating**: Glicko-2 rating indicating difficulty
+- **Themes**: Tactical patterns (fork, pin, sacrifice, etc.)
+- **Vote**: Community quality rating
+
+## Puzzle Generation
+
+Puzzles are automatically extracted from Lichess games:
+
+1. **Game Analysis**: Games analyzed by Stockfish
+2. **Pattern Detection**: Critical moments identified (tactics, mistakes)
+3. **Validation**: Solution verified for accuracy
+4. **Theme Assignment**: Tactical patterns tagged
+5. **Quality Control**: Community voting on puzzle quality
+
+<Info>
+  Puzzles come from games at all rating levels, providing training material for players from beginner to grandmaster.
+</Info>
+
+## Puzzle API
+
+```scala
+// modules/puzzle/src/main/PuzzleApi.scala:19
+object puzzle:
+  
+  def find(id: PuzzleId): Fu[Option[Puzzle]] =
+    colls.puzzle(_.byId[Puzzle](id))
+  
+  def of(user: User, page: Int): Fu[Paginator[Puzzle]] =
+    colls.puzzle: coll =>
+      Paginator(
+        adapter = new Adapter[Puzzle](
+          collection = coll,
+          selector = $("users" -> user.id),
+          sort = $sort.desc("glicko.r")
+        ),
+        page,
+        MaxPerPage(30)
+      )
+```
+
+## User Progress Tracking
+
+The system tracks each user's puzzle performance:
+
+```scala
+// modules/puzzle/src/main/PuzzleApi.scala:44
+private[puzzle] object round:
+  
+  def find(user: User, puzzleId: PuzzleId): Fu[Option[PuzzleRound]] =
+    colls.round(_.byId[PuzzleRound](
+      PuzzleRound.Id(user.id, puzzleId).toString
+    ))
+  
+  def upsert(r: PuzzleRound, angle: PuzzleAngle): Funit =
+    val roundDoc = roundHandler.write(r) ++
+      $doc(
+        PuzzleRound.BSONFields.user -> r.id.userId,
+        PuzzleRound.BSONFields.angle -> angle.some.filter(_ != PuzzleAngle.mix)
+      )
+    colls.round(_.update.one($id(r.id), roundDoc, upsert = true)).void
+```
+
+### Round Data
+
+Each puzzle attempt stores:
+- **Win/Loss**: Whether the puzzle was solved
+- **Rating change**: Glicko-2 update for both user and puzzle
+- **Timestamp**: When attempted
+- **Theme votes**: User feedback on puzzle themes
+
+## Rating System
+
+Both puzzles and users have Glicko-2 ratings:
+
+```scala
+case class Puzzle(
+  glicko: Glicko,  // Contains rating, deviation, volatility
+  // ...
+)
+
+case class UserResult(
+    puzzleId: PuzzleId,
+    userId: UserId,
+    win: PuzzleWin,
+    rating: (IntRating, IntRating)  // (before, after)
+)
+```
+
+### Rating Updates
+
+- **Win**: Both player and puzzle ratings adjust based on expected outcome
+- **Loss**: Ratings adjust inversely
+- **Provisional**: New puzzles/players have higher rating volatility
+- **Convergence**: Ratings stabilize with more attempts
+
+<Tip>
+  The Glicko-2 system ensures puzzles are matched to your skill level, providing an optimal learning challenge.
+</Tip>
+
+## Puzzle Themes
+
+Puzzles are categorized by over 150 tactical themes:
+
+```scala
+// modules/puzzle/src/main/PuzzleTheme.scala
+// Theme categories:
+// - Advanced: Clearance, Deflection, Interference, Sacrifice
+// - Basic: Fork, Pin, Skewer, Discovered Attack  
+// - Checkmate patterns: Back Rank, Smothered, Anastasia's
+// - Endgames: Pawn Endgame, Rook Endgame, Queen Endgame
+// - Material: Advantage, Equality, Sacrifice
+// - Tactical: Hanging Piece, Trapped Piece, Defensive Move
+```
+
+### Theme Voting
+
+```scala
+// modules/puzzle/src/main/PuzzleApi.scala:136
+def theme.vote(id: PuzzleId, themeStr: String, vote: Option[Boolean])(
+    using me: Me
+): FuRaise[PuzzleTheme.VoteError, Unit] =
+  PuzzleTheme.findDynamic(themeStr)
+    .raiseIfNone(Fail(s"Unknown theme $themeStr"))
+    .flatMap: theme =>
+      for
+        puzRound <- round.find(me, id)
+        puzRound <- puzRound.raiseIfNone(Fail(s"Puzzle $id not yet played"))
+        newThemes <- PuzzleRound.themeVote(puzRound.themes)(theme.key, vote)
+                      .raiseIfNone(Unchanged)
+        _ <- update.isDefined.so:
+          colls.puzzle(_.updateField($id(puzRound.id.puzzleId), 
+                                     Puzzle.BSONFields.dirty, true))
+      yield lila.mon.puzzle.vote.theme(theme.key.value, vote, puzRound.win.yes)
+              .increment()
+```
+
+Users can vote on whether a theme applies to a puzzle:
+- **Upvote**: Theme is accurate
+- **Downvote**: Theme doesn't apply
+- **Remove vote**: Undo previous vote
+
+## Puzzle Quality Voting
+
+```scala
+// modules/puzzle/src/main/PuzzleApi.scala:72
+object vote:
+  
+  def update(id: PuzzleId, user: User, vote: Boolean): Funit =
+    sequencer(id):
+      round.find(user, id)
+        .flatMapz: prevRound =>
+          trustApi.vote(user, prevRound, vote).flatMapz: weight =>
+            val voteValue = (if vote then 1 else -1) * weight
+            lila.mon.puzzle.vote.count(vote, prevRound.win.yes).increment()
+            updatePuzzle(id, voteValue, prevRound.vote)
+              .zip(colls.round(
+                _.updateField($id(prevRound.id), 
+                             PuzzleRound.BSONFields.vote, voteValue)
+              ))
+  
+  private def updatePuzzle(
+      puzzleId: PuzzleId, 
+      newVote: Int, 
+      prevVote: Option[Int]
+  ): Funit =
+    // Updates puzzle.voteUp and puzzle.voteDown
+    // Calculates new vote ratio
+    // Marks puzzle dirty if heavily downvoted
+```
+
+### Trust System
+
+Vote weight depends on user trustworthiness:
+- Accuracy on puzzles
+- Account age and activity
+- Previous voting patterns
+- Rating stability
+
+<Warning>
+  Puzzles with very low votes may be removed from rotation until reviewed.
+</Warning>
+
+## Puzzle Angles
+
+Users can train specific aspects:
+
+```scala
+// modules/puzzle/src/main/PuzzleAngle.scala
+enum PuzzleAngle:
+  case mix           // All puzzles
+  case opening       // Opening tactics
+  case middlegame    // Middlegame tactics  
+  case endgame       // Endgame tactics
+  case theme(key)    // Specific theme training
+
+def angles: Fu[PuzzleAngle.All] = for
+  themes <- theme.categorizedWithCount
+  openings <- openingApi.collection  
+yield PuzzleAngle.All(themes, openings)
+```
+
+### Themed Training
+
+```scala
+// modules/puzzle/src/main/PuzzleApi.scala:124
+private[PuzzleApi] def categorizedWithCount: Fu[List[(I18nKey, List[PuzzleTheme.WithCount])]] =
+  countApi.countsByTheme.map: counts =>
+    PuzzleTheme.categorized.map: (cat, puzzles) =>
+      cat -> puzzles.map: pt =>
+        PuzzleTheme.WithCount(pt, counts.getOrElse(pt.key, 0))
+```
+
+Each theme shows:
+- Theme name and description
+- Number of available puzzles
+- Your performance on that theme
+
+## Daily Puzzle
+
+Lichess features a daily puzzle:
+
+```scala
+// modules/puzzle/src/main/DailyPuzzle.scala
+// Selection criteria:
+// - High quality (good vote ratio)
+// - Appropriate difficulty (medium rating)
+// - Interesting themes
+// - Not recently featured
+```
+
+## Puzzle Dashboard
+
+Users have comprehensive puzzle statistics:
+
+```scala
+// modules/puzzle/src/main/PuzzleDashboard.scala
+// Dashboard shows:
+// - Overall rating and progress
+// - Performance by theme
+// - Win rate trends
+// - Difficult puzzles for review
+// - Improvement areas
+```
+
+## Casual Mode
+
+Users can solve puzzles without rating impact:
+
+```scala
+// modules/puzzle/src/main/PuzzleApi.scala:177
+object casual:
+  
+  private val store = scalalib.cache.ExpireSetMemo[String](30.minutes)
+  
+  def setCasualIfNotYetPlayed(user: User, puzzle: Puzzle): Funit =
+    round.exists(user, puzzle.id).not
+      .mapz(store.put(key(user, puzzle.id)))
+  
+  def apply(user: User, id: PuzzleId) = store.get(key(user, id))
+```
+
+<Note>
+  Casual mode allows practice without affecting your puzzle rating, useful for experimenting or warming up.
+</Note>
+
+## Puzzle Difficulty
+
+Puzzles are automatically rated by difficulty:
+
+```scala
+// modules/puzzle/src/main/PuzzleDifficulty.scala
+enum Difficulty:
+  case Easiest   // Much below your rating
+  case Easier    // Below your rating
+  case Normal    // At your rating  
+  case Harder    // Above your rating
+  case Hardest   // Much above your rating
+```
+
+Difficulty selection affects:
+- Puzzle rating range shown
+- Learning vs challenge balance
+- Rating gain potential
+
+## Puzzle Streaks
+
+The Puzzle Streak mode:
+- Solve consecutive puzzles
+- One mistake ends the streak
+- Leaderboards for longest streaks
+- Adaptive difficulty
+
+```scala
+// modules/storm/src/main/Storm.scala
+// Fast-paced puzzle solving with timer
+// Score based on speed and accuracy
+```
+
+## Puzzle Opening Themes
+
+Puzzles tagged by opening:
+
+```scala
+// modules/puzzle/src/main/PuzzleOpening.scala
+// Opening families:
+// - Sicilian Defense tactics
+// - French Defense tactics  
+// - King's Indian tactics
+// etc.
+```
+
+Helps reinforce opening understanding through tactics.
+
+## Code References
+
+- Puzzle model: `modules/puzzle/src/main/Puzzle.scala:7`
+- Puzzle API: `modules/puzzle/src/main/PuzzleApi.scala:10`
+- Theme system: `modules/puzzle/src/main/PuzzleTheme.scala`
+- Rating updates: `modules/puzzle/src/main/PuzzleFinisher.scala`
+- Dashboard: `modules/puzzle/src/main/PuzzleDashboard.scala`
+
+## Related Features
+
+<CardGroup cols={2}>
+  <Card title="Analysis" icon="chart-line" href="/features/analysis">
+    Puzzles generated from analyzed games
+  </Card>
+  <Card title="Studies" icon="book" href="/features/study">
+    Include puzzles in study chapters
+  </Card>
+  <Card title="Tournaments" icon="trophy" href="/features/tournaments">
+    Practice tactics for tournament play
+  </Card>
+  <Card title="Learn" icon="graduation-cap" href="/modules/learn">
+    Structured chess lessons and exercises
+  </Card>
+</CardGroup>

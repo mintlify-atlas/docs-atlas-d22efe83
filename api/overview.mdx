@@ -1,0 +1,190 @@
+---
+title: HTTP API Overview
+description: Introduction to the Lichess HTTP API with base URL, versioning, and rate limits
+---
+
+## Introduction
+
+The Lichess HTTP API provides programmatic access to Lichess functionality including games, users, tournaments, puzzles, and more. The API supports both anonymous and authenticated requests via OAuth2.
+
+## Base URL
+
+All API endpoints are relative to:
+
+```
+https://lichess.org
+```
+
+## API Versioning
+
+API versioning is handled through request headers:
+
+```http
+Accept: application/vnd.lichess.v5+json
+```
+
+The current API version can be checked at `/api/status`:
+
+```bash
+curl https://lichess.org/api/status
+```
+
+<ResponseExample>
+```json
+{
+  "api": {
+    "current": 5,
+    "olds": []
+  },
+  "mustUpgrade": false
+}
+```
+</ResponseExample>
+
+## Rate Limiting
+
+The API implements sophisticated rate limiting based on several factors:
+
+### Rate Limit Factors
+
+- **Authentication Status**: Authenticated requests have higher limits
+- **User Verification**: Verified users get increased limits
+- **IP Trust**: Trusted IPs receive more generous limits
+- **Endpoint Type**: Different endpoints have different limits
+
+### Common Rate Limits
+
+| Endpoint Type | Anonymous | Authenticated | Verified |
+|--------------|-----------|---------------|----------|
+| User Show | 2-4/day (IP-based) | 4/day | 8000/day |
+| Cloud Eval | 3000/day (IP) | 3000/day | 3000/day |
+| User Activity | Cost-based | Cost-based | Cost-based |
+| Game Export | 25/sec | 30-60/sec | 60/sec |
+
+### Rate Limit Headers
+
+When rate limited, you'll receive a `429 Too Many Requests` response.
+
+## Content Types
+
+### Request Content Types
+
+- `application/json` - JSON data
+- `application/x-www-form-urlencoded` - Form data
+- `text/plain` - Plain text (for ID lists)
+
+### Response Content Types
+
+- `application/json` - JSON responses
+- `application/x-ndjson` - Newline-delimited JSON (streaming)
+- `application/x-chess-pgn` - PGN format for games
+- `text/csv` - CSV format for exports
+- `text/event-stream` - Server-sent events
+
+## Response Formats
+
+Many endpoints support multiple response formats via query parameters or Accept headers:
+
+```bash
+# JSON format (default)
+curl https://lichess.org/api/game/{gameId}
+
+# PGN format
+curl https://lichess.org/api/game/{gameId}.pgn
+
+# NDJSON streaming
+curl https://lichess.org/api/games/user/{username}
+```
+
+## Error Handling
+
+### Error Response Format
+
+```json
+{
+  "error": "Error message describing what went wrong"
+}
+```
+
+### Common HTTP Status Codes
+
+- `200 OK` - Successful request
+- `204 No Content` - Successful request with no response body
+- `400 Bad Request` - Invalid parameters or request format
+- `401 Unauthorized` - Authentication required
+- `403 Forbidden` - Insufficient permissions
+- `404 Not Found` - Resource not found
+- `429 Too Many Requests` - Rate limit exceeded
+- `500 Internal Server Error` - Server error
+
+## Streaming Endpoints
+
+Many endpoints support streaming responses using NDJSON (newline-delimited JSON):
+
+```bash
+# Stream live game events
+curl https://lichess.org/api/stream/event \
+  -H "Authorization: Bearer {token}"
+
+# Stream tournament games
+curl https://lichess.org/api/tournament/{id}/games
+```
+
+Streaming responses include keep-alive messages to prevent connection timeouts.
+
+## Concurrency Limits
+
+The API enforces concurrency limits per IP address:
+
+- **Event Streams**: 4 concurrent connections (12 for verified users)
+- **Downloads**: 2 concurrent connections
+- **API Move Stream**: 8 concurrent connections
+- **Generous Endpoints**: 20 concurrent connections
+
+## Mobile API
+
+Special aggregated endpoints are available for mobile applications:
+
+- `/api/mobile/home` - Home screen data
+- `/api/mobile/watch` - Watch screen data
+- `/api/mobile/profile/{username}` - User profile data
+- `/api/mobile/my-games` - Current games
+
+These endpoints require the `Web.Mobile` OAuth scope.
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use Streaming When Possible">
+    For large datasets (game exports, tournament results), use streaming endpoints to avoid memory issues and timeouts.
+  </Accordion>
+  
+  <Accordion title="Respect Rate Limits">
+    Implement exponential backoff when receiving 429 responses. Don't poll streaming endpoints - they're designed to be kept open.
+  </Accordion>
+  
+  <Accordion title="Authenticate for Better Limits">
+    Use OAuth authentication to get higher rate limits and access to additional endpoints.
+  </Accordion>
+  
+  <Accordion title="Use NDJSON for Bulk Data">
+    When fetching multiple resources, prefer NDJSON streaming over multiple individual requests.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="key" href="/api/authentication">
+    Learn how to authenticate with OAuth2
+  </Card>
+  <Card title="Games API" icon="chess" href="/api/games">
+    Access game data and exports
+  </Card>
+  <Card title="Users API" icon="user" href="/api/users">
+    Fetch user profiles and statistics
+  </Card>
+  <Card title="Tournaments API" icon="trophy" href="/api/tournaments">
+    Work with tournament data
+  </Card>
+</CardGroup>

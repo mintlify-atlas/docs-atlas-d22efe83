@@ -1,0 +1,424 @@
+---
+title: Tournaments & Simuls
+description: Explore Lichess's tournament system including Arena, Swiss, and Simul formats with automated pairing and real-time standings
+icon: trophy
+---
+
+## Overview
+
+Lichess hosts thousands of tournaments daily, from small casual events to large-scale arena competitions with thousands of players. The platform supports multiple tournament formats and includes simultaneous exhibitions (simuls) where one player faces many opponents.
+
+## Tournament Types
+
+### Arena Tournaments
+
+The most popular format on Lichess, Arena tournaments feature:
+
+- **Continuous pairing**: Players are paired as soon as they finish a game
+- **Streak bonuses**: Consecutive wins award bonus points
+- **Berserk option**: Sacrifice half your time for bonus points
+- **Running clock**: Tournament runs for a fixed duration
+
+### Swiss Tournaments
+
+- **Fixed rounds**: Predetermined number of rounds
+- **Swiss pairing**: Players with similar scores paired together
+- **No elimination**: Everyone plays all rounds
+- **Fair progression**: More predictable tournament structure
+
+### Scheduled Tournaments
+
+Lichess runs official tournaments on a fixed schedule:
+
+- **Hourly**: Bullet, Blitz, Rapid
+- **Daily**: Various time controls
+- **Weekly**: Longer events with special conditions
+- **Monthly**: Shield tournaments for top players
+- **Yearly**: Annual championships
+
+## Tournament Data Model
+
+```scala
+// modules/tournament/src/main/Tournament.scala:15
+case class Tournament(
+    id: TourId,
+    name: String,
+    status: Status,
+    clock: ClockConfig,
+    minutes: Int,
+    variant: chess.variant.Variant,
+    position: Option[Fen.Standard],
+    rated: Rated,
+    password: Option[String] = None,
+    conditions: TournamentCondition.All,
+    teamBattle: Option[TeamBattle] = None,
+    noBerserk: Boolean = false,
+    noStreak: Boolean = false,
+    schedule: Option[Scheduled],
+    nbPlayers: Int,
+    createdAt: Instant,
+    createdBy: UserId,
+    startsAt: Instant,
+    winnerId: Option[UserId] = None,
+    featuredId: Option[GameId] = None,
+    spotlight: Option[Spotlight] = None
+)
+```
+
+## Tournament Lifecycle
+
+<Steps>
+
+<Step title="Created">
+  Tournament is created and open for registration
+  ```scala
+  def isCreated = status == Status.created
+  def isEnterable = !isFinished
+  ```
+</Step>
+
+<Step title="Countdown">
+  Players join, system displays countdown to start
+  ```scala
+  def secondsToStart = Seconds((startsAt.toSeconds - nowSeconds).toInt.atLeast(0))
+  def imminentStart = isCreated && (startsAt.toMillis - nowMillis) < 1000
+  ```
+</Step>
+
+<Step title="Started">
+  Tournament begins, first round pairings generated
+  ```scala
+  def isStarted = status == Status.started
+  def progressPercent: Int =
+    if isCreated then 0
+    else if isFinished then 100
+    else
+      val total = minutes * 60
+      val remaining = secondsToFinish.value
+      100 - (remaining * 100 / total)
+  ```
+</Step>
+
+<Step title="Running">
+  Players complete games, automatic re-pairing occurs
+  ```scala
+  def pairingsClosed = secondsToFinish < 
+    Seconds(math.max(30, math.min(clock.limitSeconds.value / 2, 120)))
+  ```
+</Step>
+
+<Step title="Finished">
+  Time expires, final standings calculated, winner declared
+  ```scala
+  def isFinished = status == Status.finished
+  def finishedSinceSeconds: Option[Long] = 
+    isFinished.option(nowSeconds - finishesAt.toSeconds)
+  ```
+</Step>
+
+</Steps>
+
+## Tournament Features
+
+### Berserk
+
+Players can "go berserk" at the start of a game:
+
+```scala
+// modules/tournament/src/main/Tournament.scala:123
+def berserkable = !noBerserk && clock.berserkable
+
+// From game module - clock halved
+def goBerserk(color: Color): Option[Progress] =
+  clock.ifTrue(game.berserkable && !player(color).berserk)
+    .map: c =>
+      val newClock = c.goBerserk(color)
+      // Player gets half their time but bonus points
+```
+
+<Warning>
+  Berserk gives 1 bonus point if you win, but you play with half your clock time. Only available for games of 2+ minutes initial time.
+</Warning>
+
+### Streak System
+
+```scala
+// modules/tournament/src/main/Tournament.scala:124  
+def streakable = !noStreak
+
+// Consecutive wins multiply points:
+// Win 1: 2 points
+// Win 2: 3 points  
+// Win 3: 4 points
+// Win 4+: 5 points (max)
+// Loss: Streak resets
+```
+
+### Pairing System
+
+Arena tournaments use the `AutoPairing` component:
+
+```scala
+// modules/tournament/src/main/AutoPairing.scala
+// Pairing algorithm considers:
+// - Score proximity (similar-ranked players)
+// - Color balance (alternating colors)
+// - Opponent history (avoid rematches)
+// - Rating stability (provisional ratings handled specially)
+```
+
+## Tournament Conditions
+
+Tournaments can restrict entry based on:
+
+```scala
+case class TournamentCondition.All(
+  nbRatedGame: Option[NbRatedGame],      // Minimum rated games
+  maxRating: Option[MaxRating],          // Rating ceiling
+  minRating: Option[MinRating],          // Rating floor  
+  titled: Option[Titled],                // Only titled players
+  teamMember: Option[TeamMember],        // Team membership
+  accountAge: Option[AccountAge]         // Account age requirement
+)
+```
+
+### Entry Validation
+
+```scala
+// modules/tournament/src/main/Tournament.scala:229
+enum JoinResult(val error: Option[String]):
+  case Ok extends JoinResult(none)
+  case WrongEntryCode extends JoinResult("Wrong entry code".some)
+  case Paused extends JoinResult("Your pause is not over yet".some)
+  case Verdicts extends JoinResult("Tournament restrictions".some)
+  case MissingTeam extends JoinResult("Missing team".some)
+  case ArenaBanned extends JoinResult("You are not allowed to join arenas".some)
+```
+
+## Team Battles
+
+Team Battle tournaments pit teams against each other:
+
+```scala
+// modules/tournament/src/main/Tournament.scala:26
+teamBattle: Option[TeamBattle] = None,
+
+def isTeamBattle = teamBattle.isDefined
+def isTeamRelated = isTeamBattle || conditions.teamMember.isDefined
+
+// Scoring tracks both individual and team performance
+// Team with highest cumulative score wins
+```
+
+<CardGroup cols={2}>
+  <Card title="Join a Team" icon="users">
+    Players join teams to participate in team battles
+  </Card>
+  <Card title="Team Leaderboard" icon="ranking-star">
+    Real-time team standings during battle
+  </Card>
+</CardGroup>
+
+## Schedule System
+
+Lichess automatically creates scheduled tournaments:
+
+```scala
+// modules/tournament/src/main/Schedule.scala
+enum Freq:
+  case Hourly, Daily, Eastern, Weekly, Weekend, Monthly,
+       Shield, Marathon, Yearly, Unique
+
+// modules/tournament/src/main/Tournament.scala:205
+def scheduleAs(sched: Schedule, startsAt: Instant, minutes: Int) =
+  Tournament(
+    id = makeId,
+    name = TournamentName(sched, full = false),
+    status = Status.created,
+    clock = Schedule.clockFor(sched),
+    minutes = minutes,
+    createdBy = UserId.lichess,
+    variant = sched.variant,
+    rated = Rated.Yes,
+    conditions = sched.conditions,
+    schedule = Scheduled(sched.freq, sched.at).some
+  )
+```
+
+### Spotlight Tournaments
+
+```scala
+spotlight: Option[Spotlight]
+
+// Featured tournaments shown prominently:
+// - Shield tournaments (monthly championships)
+// - Marathon events (6+ hours)
+// - Special themed tournaments
+```
+
+## Simultaneous Exhibitions (Simuls)
+
+Simuls allow one strong player to face multiple opponents simultaneously:
+
+```scala
+// modules/simul/src/main/Simul.scala:16
+case class Simul(
+    id: SimulId,
+    name: String,
+    status: SimulStatus,
+    clock: SimulClock,
+    applicants: List[SimulApplicant],
+    pairings: List[SimulPairing],
+    variants: List[Variant],
+    position: Option[Fen.Full],
+    hostId: UserId,
+    hostRating: IntRating,
+    startedAt: Option[Instant],
+    finishedAt: Option[Instant],
+    hostGameId: Option[String],  // Game host is currently viewing
+    color: Option[String]
+)
+```
+
+### Simul Workflow
+
+<Steps>
+
+<Step title="Host Creates Simul">
+  ```scala
+  def make(
+      host: UserWithPerfs,
+      name: String,
+      clock: SimulClock,
+      variants: List[Variant],
+      color: String  // Which color host plays
+  ): Simul
+  ```
+</Step>
+
+<Step title="Players Apply">
+  ```scala
+  def addApplicant(applicant: SimulApplicant) =
+    Created:
+      if !hasApplicant(applicant.player.user) && 
+         variants.has(applicant.player.variant)
+      then copy(applicants = applicants :+ applicant)
+  ```
+</Step>
+
+<Step title="Host Accepts Players">
+  ```scala
+  def accept(userId: UserId, v: Boolean) =
+    Created:
+      copy(applicants = applicants.map: a =>
+        if a.is(userId) then a.copy(accepted = v) else a)
+  
+  def nbAccepted = applicants.count(_.accepted)
+  def startable = isCreated && nbAccepted > 1
+  ```
+</Step>
+
+<Step title="Simul Starts">
+  ```scala
+  def start =
+    startable.option(
+      copy(
+        status = SimulStatus.Started,
+        startedAt = nowInstant.some,
+        applicants = Nil,
+        clock = clock.adjustedForPlayers(nbAccepted),
+        pairings = applicants.collect:
+          case a if a.accepted => SimulPairing(a.player)
+      )
+    )
+  ```
+</Step>
+
+<Step title="Games Played">
+  Host plays all games simultaneously, moving between boards
+  ```scala
+  def updatePairing(gameId: GameId, f: SimulPairing => SimulPairing) =
+    copy(pairings = pairings.map(p => if p.gameId == gameId then f(p) else p))
+      .finishIfDone
+  ```
+</Step>
+
+<Step title="Simul Completes">
+  ```scala
+  private def finishIfDone =
+    if isStarted && pairings.forall(_.finished) then
+      copy(
+        status = SimulStatus.Finished,
+        finishedAt = nowInstant.some,
+        hostGameId = none
+      )
+  
+  def wins = pairings.count(p => p.finished && p.wins.has(false))
+  def draws = pairings.count(p => p.finished && p.wins.isEmpty)
+  def losses = pairings.count(p => p.finished && p.wins.has(true))
+  ```
+</Step>
+
+</Steps>
+
+### Simul Scoring
+
+```scala
+// modules/simul/src/main/Simul.scala:140
+def wins = pairings.count(p => p.finished && p.wins.has(false))   // Host wins
+def draws = pairings.count(p => p.finished && p.wins.isEmpty)
+def losses = pairings.count(p => p.finished && p.wins.has(true))  // Host losses  
+def ongoing = pairings.count(_.ongoing)
+
+def hostScore = lila.core.rating.Score(wins, losses, draws, none)
+def playerScore(userId: UserId) = pairingOf(userId).map: p =>
+  Score(
+    p.wins.has(true).so(1),   // Beat the host = 1
+    p.wins.has(false).so(1),  // Lost to host = 0 
+    p.wins.isEmpty.so(1),     // Drew host = 0.5
+    none
+  )
+```
+
+## Performance Optimizations
+
+### Leaderboard Indexing
+
+```scala
+// modules/tournament/src/main/LeaderboardIndexer.scala
+// Real-time leaderboard updates using indexed caching
+// Avoids recalculating full standings on every game completion
+```
+
+### Pairing Performance
+
+```scala
+// modules/tournament/src/main/PairingRepo.scala  
+// Efficient pairing lookup and storage
+// Recent pairings cached to prevent immediate rematches
+```
+
+## Code References
+
+- Tournament model: `modules/tournament/src/main/Tournament.scala:15`
+- Auto pairing: `modules/tournament/src/main/AutoPairing.scala`
+- Simul system: `modules/simul/src/main/Simul.scala:16`
+- Swiss format: `modules/swiss/src/main/Swiss.scala`
+- Schedule generation: `modules/tournament/src/main/Schedule.scala`
+
+## Related Features
+
+<CardGroup cols={2}>
+  <Card title="Gameplay" icon="chess-pawn" href="/features/gameplay">
+    Real-time game system powering tournament games
+  </Card>
+  <Card title="Teams" icon="users" href="/modules/team">
+    Team management for team battles
+  </Card>
+  <Card title="Leaderboards" icon="ranking-star" href="/modules/tournament">
+    Tournament standings and history
+  </Card>
+  <Card title="Swiss System" icon="chess-board" href="/modules/swiss">
+    Swiss tournament format details
+  </Card>
+</CardGroup>

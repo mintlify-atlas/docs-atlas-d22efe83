@@ -1,0 +1,624 @@
+---
+title: Users API
+description: Endpoints for accessing user profiles, ratings, activity, and statistics
+---
+
+## Get User Profile
+
+Get public information about a user.
+
+```bash
+GET /api/user/{username}
+```
+
+<ParamField path="username" type="string" required>
+  Username of the user
+</ParamField>
+
+<ParamField query="trophies" type="boolean" default="false">
+  Include trophy data
+</ParamField>
+
+<ParamField query="challenge" type="boolean" default="false">
+  Include whether the user can be challenged
+</ParamField>
+
+<ParamField query="profile" type="boolean" default="true">
+  Include profile information
+</ParamField>
+
+<ParamField query="rank" type="boolean" default="false">
+  Include ranking information
+</ParamField>
+
+<ParamField query="fideId" type="boolean" default="false">
+  Include FIDE player ID if available
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl "https://lichess.org/api/user/username?trophies=true&rank=true"
+```
+
+```bash Authenticated
+curl https://lichess.org/api/user/username \
+  -H "Authorization: Bearer {token}"
+```
+</CodeGroup>
+
+<ResponseExample>
+```json
+{
+  "id": "username",
+  "username": "Username",
+  "createdAt": 1658845200000,
+  "seenAt": 1658931600000,
+  "perfs": {
+    "blitz": {
+      "games": 1234,
+      "rating": 1800,
+      "rd": 45,
+      "prog": 12
+    },
+    "bullet": {
+      "games": 567,
+      "rating": 1750,
+      "rd": 60,
+      "prog": -8
+    },
+    "rapid": {
+      "games": 890,
+      "rating": 1850,
+      "rd": 50,
+      "prog": 5
+    }
+  },
+  "count": {
+    "all": 2691,
+    "rated": 2500,
+    "ai": 50,
+    "draw": 100,
+    "drawH": 95,
+    "loss": 800,
+    "lossH": 750,
+    "win": 1791,
+    "winH": 1655
+  },
+  "followable": true,
+  "following": false,
+  "blocking": false,
+  "followsYou": false
+}
+```
+</ResponseExample>
+
+## Get Current User Account
+
+Get the profile of the authenticated user.
+
+```bash
+GET /api/account
+```
+
+Requires authentication.
+
+<ParamField query="playban" type="boolean" default="false">
+  Include current playban information
+</ParamField>
+
+<ResponseExample>
+```json
+{
+  "id": "userid",
+  "username": "Username",
+  "email": "user@example.com",
+  "title": "GM",
+  "online": true,
+  "playing": "https://lichess.org/abcd1234",
+  "patron": true,
+  "verified": true,
+  "perfs": { },
+  "createdAt": 1658845200000,
+  "seenAt": 1658931600000,
+  "playTime": {
+    "total": 3600000,
+    "tv": 600000
+  },
+  "url": "https://lichess.org/@/Username"
+}
+```
+</ResponseExample>
+
+## Get Multiple Users by ID
+
+Get multiple user profiles in one request.
+
+```bash
+POST /api/users
+```
+
+<ParamField body="usernames" type="string" required>
+  Comma-separated list of usernames (max 300)
+</ParamField>
+
+<ParamField query="profile" type="boolean" default="true">
+  Include profile information
+</ParamField>
+
+<ParamField query="rank" type="boolean" default="false">
+  Include ranking information
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://lichess.org/api/users \
+  -H "Content-Type: text/plain" \
+  -d "user1,user2,user3"
+```
+</CodeGroup>
+
+Returns an array of user objects.
+
+## Get Users Status
+
+Get real-time status of multiple users.
+
+```bash
+GET /api/users/status
+```
+
+<ParamField query="ids" type="string" required>
+  Comma-separated user IDs (max 100)
+</ParamField>
+
+<ParamField query="withGameIds" type="boolean" default="false">
+  Include current game IDs
+</ParamField>
+
+<ParamField query="withGameMetas" type="boolean" default="false">
+  Include current game metadata
+</ParamField>
+
+<ParamField query="withSignal" type="boolean" default="false">
+  Include connection lag rating
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl "https://lichess.org/api/users/status?ids=user1,user2&withGameIds=true"
+```
+</CodeGroup>
+
+<ResponseExample>
+```json
+[
+  {
+    "id": "user1",
+    "name": "User1",
+    "online": true,
+    "playing": true,
+    "streaming": false,
+    "playingId": "abcd1234"
+  },
+  {
+    "id": "user2",
+    "name": "User2",
+    "online": false,
+    "playing": false
+  }
+]
+```
+</ResponseExample>
+
+## Get Top Players
+
+Get the top players for a performance type.
+
+```bash
+GET /api/player/top/{nb}/{perfKey}
+```
+
+<ParamField path="nb" type="integer" required>
+  Number of players to fetch (max 200)
+</ParamField>
+
+<ParamField path="perfKey" type="string" required>
+  Performance type: `bullet`, `blitz`, `rapid`, `classical`, `ultraBullet`, `chess960`, `crazyhouse`, `antichess`, `atomic`, `horde`, `kingOfTheHill`, `racingKings`, `threeCheck`
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl https://lichess.org/api/player/top/10/blitz
+```
+</CodeGroup>
+
+<ResponseExample>
+```json
+{
+  "users": [
+    {
+      "id": "topplayer",
+      "username": "TopPlayer",
+      "perfs": {
+        "blitz": {
+          "rating": 3000,
+          "progress": 5
+        }
+      },
+      "title": "GM",
+      "online": true,
+      "patron": true
+    }
+  ]
+}
+```
+</ResponseExample>
+
+## Get User Activity
+
+Get recent activity for a user.
+
+```bash
+GET /api/user/{username}/activity
+```
+
+<ParamField path="username" type="string" required>
+  Username of the user
+</ParamField>
+
+Returns array of activity entries (games, puzzles, tournaments, etc.) from recent weeks.
+
+<ResponseExample>
+```json
+[
+  {
+    "interval": {
+      "start": 1658845200000,
+      "end": 1659450000000
+    },
+    "games": {
+      "blitz": {
+        "win": 45,
+        "loss": 32,
+        "draw": 5,
+        "rp": {
+          "before": 1800,
+          "after": 1825
+        }
+      }
+    },
+    "puzzles": {
+      "score": {
+        "win": 23,
+        "loss": 7,
+        "rp": {
+          "before": 2000,
+          "after": 2015
+        }
+      }
+    },
+    "tournaments": {
+      "nb": 3,
+      "best": [
+        {
+          "tournament": {
+            "id": "tourn123",
+            "name": "Titled Arena"
+          },
+          "nbGames": 7,
+          "score": 21,
+          "rank": 15
+        }
+      ]
+    }
+  }
+]
+```
+</ResponseExample>
+
+## Get Rating History
+
+Get rating history for all performance types.
+
+```bash
+GET /api/user/{username}/rating-history
+```
+
+<ParamField path="username" type="string" required>
+  Username of the user
+</ParamField>
+
+<ResponseExample>
+```json
+[
+  {
+    "name": "Blitz",
+    "points": [
+      [2023, 6, 15, 1800],
+      [2023, 6, 16, 1810],
+      [2023, 6, 17, 1805]
+    ]
+  },
+  {
+    "name": "Bullet",
+    "points": [
+      [2023, 6, 15, 1750],
+      [2023, 6, 16, 1755]
+    ]
+  }
+]
+```
+</ResponseExample>
+
+Each point is `[year, month, day, rating]`.
+
+## Get Performance Statistics
+
+Get detailed statistics for a specific performance type.
+
+```bash
+GET /api/user/{username}/perf/{perfKey}
+```
+
+<ParamField path="username" type="string" required>
+  Username of the user
+</ParamField>
+
+<ParamField path="perfKey" type="string" required>
+  Performance type (bullet, blitz, rapid, etc.)
+</ParamField>
+
+<ResponseExample>
+```json
+{
+  "user": {
+    "name": "Username"
+  },
+  "perf": {
+    "glicko": {
+      "rating": 1800,
+      "deviation": 45,
+      "provisional": false
+    },
+    "nb": 1234,
+    "progress": 12
+  },
+  "rank": 12345,
+  "percentile": 85.5,
+  "stat": {
+    "perfType": {
+      "key": "blitz",
+      "name": "Blitz"
+    },
+    "highest": {
+      "int": 1850,
+      "at": 1658845200000,
+      "gameId": "abcd1234"
+    },
+    "lowest": {
+      "int": 1500,
+      "at": 1648845200000,
+      "gameId": "efgh5678"
+    },
+    "bestWins": {
+      "results": []
+    },
+    "worstLosses": {
+      "results": []
+    },
+    "count": {
+      "all": 1234,
+      "rated": 1200,
+      "win": 650,
+      "loss": 500,
+      "draw": 84,
+      "tour": 250,
+      "berserk": 50,
+      "disconnects": 5
+    },
+    "resultStreak": {
+      "win": {
+        "cur": { "v": 3 },
+        "max": { "v": 12 }
+      },
+      "loss": {
+        "cur": { "v": 0 },
+        "max": { "v": 7 }
+      }
+    }
+  }
+}
+```
+</ResponseExample>
+
+## Get User Notes
+
+Get all notes written about a user (moderator only).
+
+```bash
+GET /api/user/{username}/note
+```
+
+Requires moderator privileges.
+
+## Write User Note
+
+Write a note about a user (moderator only).
+
+```bash
+POST /api/user/{username}/note
+```
+
+<ParamField body="text" type="string" required>
+  Note content
+</ParamField>
+
+Requires moderator privileges.
+
+## User Autocomplete
+
+Search for users by username prefix.
+
+```bash
+GET /api/player/autocomplete
+```
+
+<ParamField query="term" type="string" required>
+  Username prefix to search (min 3 characters)
+</ParamField>
+
+<ParamField query="object" type="boolean" default="false">
+  Return full user objects instead of just usernames
+</ParamField>
+
+<ParamField query="friend" type="boolean" default="false">
+  Only search followed users
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl "https://lichess.org/api/player/autocomplete?term=user&object=true"
+```
+</CodeGroup>
+
+## User Search
+
+Search for users (requires User Search permission).
+
+```bash
+GET /player/search/{term}
+```
+
+<ParamField path="term" type="string" required>
+  Search term
+</ParamField>
+
+## Following List
+
+Get the list of users followed by a user.
+
+```bash
+GET /@/{username}/following
+```
+
+<ParamField path="username" type="string" required>
+  Username of the user
+</ParamField>
+
+<ParamField query="page" type="integer" default="1">
+  Page number
+</ParamField>
+
+## Follow/Unfollow User
+
+Follow or unfollow a user.
+
+<CodeGroup>
+```bash Follow User
+curl -X POST https://lichess.org/api/rel/follow/{username} \
+  -H "Authorization: Bearer {token}"
+```
+
+```bash Unfollow User
+curl -X POST https://lichess.org/api/rel/unfollow/{username} \
+  -H "Authorization: Bearer {token}"
+```
+</CodeGroup>
+
+## Block/Unblock User
+
+Block or unblock a user.
+
+<CodeGroup>
+```bash Block User
+curl -X POST https://lichess.org/api/rel/block/{username} \
+  -H "Authorization: Bearer {token}"
+```
+
+```bash Unblock User
+curl -X POST https://lichess.org/api/rel/unblock/{username} \
+  -H "Authorization: Bearer {token}"
+```
+</CodeGroup>
+
+## Get Following Users Stream
+
+Stream the list of users you follow.
+
+```bash
+GET /api/rel/following
+```
+
+Requires authentication. Returns NDJSON stream.
+
+## Stream User Moderator Events
+
+Stream moderator events for a user (moderator only).
+
+```bash
+GET /api/stream/{username}/mod
+```
+
+Requires moderator privileges.
+
+## Rating Distribution
+
+Get rating distribution for a performance type.
+
+```bash
+GET /stat/rating/distribution/{perfKey}
+```
+
+<ParamField path="perfKey" type="string" required>
+  Performance type
+</ParamField>
+
+<ParamField query="username" type="string">
+  Highlight a specific user's rating
+</ParamField>
+
+## Response Fields
+
+<ResponseField name="id" type="string">
+  User ID (lowercase username)
+</ResponseField>
+
+<ResponseField name="username" type="string">
+  Display username
+</ResponseField>
+
+<ResponseField name="title" type="string">
+  Title (GM, IM, FM, WGM, WIM, WFM, CM, WCM, NM, LM, BOT)
+</ResponseField>
+
+<ResponseField name="patron" type="boolean">
+  Whether user is a Lichess patron
+</ResponseField>
+
+<ResponseField name="verified" type="boolean">
+  Whether user is verified
+</ResponseField>
+
+<ResponseField name="online" type="boolean">
+  Whether user is currently online
+</ResponseField>
+
+<ResponseField name="playing" type="string">
+  URL of current game if playing
+</ResponseField>
+
+<ResponseField name="streaming" type="boolean">
+  Whether user is currently streaming
+</ResponseField>
+
+<ResponseField name="perfs" type="object">
+  Performance ratings for different game types
+</ResponseField>
+
+<ResponseField name="count" type="object">
+  Game counts (all, rated, win, loss, draw, etc.)
+</ResponseField>
+
+<ResponseField name="profile" type="object">
+  User profile information (bio, country, location, links, etc.)
+</ResponseField>

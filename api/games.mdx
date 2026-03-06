@@ -1,0 +1,517 @@
+---
+title: Games API
+description: Endpoints for accessing game data, exporting games, and streaming game events
+---
+
+## Get Single Game
+
+Export a single game by ID.
+
+<CodeGroup>
+```bash cURL
+curl https://lichess.org/api/game/{gameId}
+```
+
+```bash PGN Format
+curl https://lichess.org/game/export/{gameId}.pgn
+```
+</CodeGroup>
+
+<ParamField path="gameId" type="string" required>
+  The 8-character game ID
+</ParamField>
+
+<ParamField query="evals" type="boolean" default="false">
+  Include analysis evaluation data
+</ParamField>
+
+<ParamField query="opening" type="boolean" default="false">
+  Include opening information
+</ParamField>
+
+<ParamField query="literate" type="boolean" default="false">
+  Include human-readable move comments
+</ParamField>
+
+<ParamField query="clocks" type="boolean" default="false">
+  Include clock times for each move
+</ParamField>
+
+<ResponseExample>
+```json JSON Response
+{
+  "id": "abcd1234",
+  "rated": true,
+  "variant": "standard",
+  "speed": "blitz",
+  "perf": "blitz",
+  "createdAt": 1658845200000,
+  "lastMoveAt": 1658845800000,
+  "status": "mate",
+  "players": {
+    "white": {
+      "user": {
+        "name": "PlayerOne",
+        "id": "playerone"
+      },
+      "rating": 1800,
+      "ratingDiff": 12
+    },
+    "black": {
+      "user": {
+        "name": "PlayerTwo",
+        "id": "playertwo"
+      },
+      "rating": 1750,
+      "ratingDiff": -12
+    }
+  },
+  "winner": "white",
+  "moves": "e4 e5 Nf3 Nc6",
+  "clock": {
+    "initial": 300,
+    "increment": 0
+  }
+}
+```
+</ResponseExample>
+
+## Export Games by User
+
+Download all games of a user in PGN or NDJSON format.
+
+```bash
+GET /api/games/user/{username}
+```
+
+<ParamField path="username" type="string" required>
+  Username of the player
+</ParamField>
+
+<ParamField query="since" type="timestamp">
+  Download games played since this timestamp (milliseconds)
+</ParamField>
+
+<ParamField query="until" type="timestamp">
+  Download games played until this timestamp (milliseconds)
+</ParamField>
+
+<ParamField query="max" type="integer">
+  Maximum number of games to download
+</ParamField>
+
+<ParamField query="vs" type="string">
+  Filter games against a specific opponent
+</ParamField>
+
+<ParamField query="rated" type="boolean">
+  Filter by rated status (true/false)
+</ParamField>
+
+<ParamField query="perfType" type="string">
+  Filter by game speed: `ultraBullet`, `bullet`, `blitz`, `rapid`, `classical`, `correspondence`
+</ParamField>
+
+<ParamField query="color" type="string">
+  Filter by player color: `white` or `black`
+</ParamField>
+
+<ParamField query="analysed" type="boolean">
+  Only games with computer analysis
+</ParamField>
+
+<ParamField query="ongoing" type="boolean" default="false">
+  Include ongoing games
+</ParamField>
+
+<ParamField query="finished" type="boolean" default="true">
+  Include finished games
+</ParamField>
+
+<ParamField query="sort" type="string" default="dateDesc">
+  Sort order: `dateAsc` or `dateDesc`
+</ParamField>
+
+<CodeGroup>
+```bash PGN Format
+curl "https://lichess.org/api/games/user/username?perfType=blitz&max=50" \
+  -H "Accept: application/x-chess-pgn"
+```
+
+```bash NDJSON Format
+curl "https://lichess.org/api/games/user/username?since=1658845200000"
+```
+
+```bash With Authentication
+curl "https://lichess.org/api/games/user/username?rated=true" \
+  -H "Authorization: Bearer {token}"
+```
+</CodeGroup>
+
+### Rate Limits
+
+- Anonymous: 25 games/second
+- Authenticated: 30 games/second
+- Playing yourself: 60 games/second
+- Verified users: Higher limits
+
+## Export Games by IDs
+
+Export multiple games by their IDs.
+
+```bash
+POST /api/games/export/_ids
+```
+
+Send game IDs as comma-separated values in the request body.
+
+<ParamField body="ids" type="string" required>
+  Comma-separated list of game IDs (max 300 for anonymous, 600 for verified)
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://lichess.org/api/games/export/_ids \
+  -H "Content-Type: text/plain" \
+  -d "gameId1,gameId2,gameId3"
+```
+
+```bash With Players File
+curl -X POST "https://lichess.org/api/games/export/_ids?players=player1.txt" \
+  -H "Content-Type: text/plain" \
+  -d "gameId1,gameId2"
+```
+</CodeGroup>
+
+## Export User Imported Games
+
+Export all games imported by the authenticated user.
+
+```bash
+GET /api/games/export/imports
+```
+
+Requires authentication. Returns games in PGN format.
+
+<CodeGroup>
+```bash cURL
+curl https://lichess.org/api/games/export/imports \
+  -H "Authorization: Bearer {token}"
+```
+</CodeGroup>
+
+## Export User Bookmarks
+
+Export all bookmarked games.
+
+```bash
+GET /api/games/export/bookmarks
+```
+
+<ParamField query="since" type="timestamp">
+  Filter bookmarks since timestamp
+</ParamField>
+
+<ParamField query="until" type="timestamp">
+  Filter bookmarks until timestamp
+</ParamField>
+
+<ParamField query="max" type="integer">
+  Maximum number of games
+</ParamField>
+
+<ParamField query="sort" type="string" default="dateDesc">
+  Sort order: `dateAsc` or `dateDesc`
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl https://lichess.org/api/games/export/bookmarks \
+  -H "Authorization: Bearer {token}"
+```
+</CodeGroup>
+
+## Stream Game Moves
+
+Stream the moves of a game in real-time.
+
+```bash
+GET /api/stream/game/{gameId}
+```
+
+<ParamField path="gameId" type="string" required>
+  The game ID
+</ParamField>
+
+Returns NDJSON stream with move updates.
+
+<ResponseExample>
+```json Move Update
+{
+  "type": "move",
+  "ply": 5,
+  "move": "e4",
+  "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1",
+  "wc": 300,
+  "bc": 300
+}
+```
+</ResponseExample>
+
+## Stream Games by Users
+
+Stream games being played by a list of users.
+
+```bash
+POST /api/stream/games-by-users
+```
+
+<ParamField body="userIds" type="string" required>
+  Comma-separated list of user IDs (max 300-900 depending on account)
+</ParamField>
+
+<ParamField query="withCurrentGames" type="boolean" default="false">
+  Include current ongoing games
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://lichess.org/api/stream/games-by-users \
+  -H "Content-Type: text/plain" \
+  -H "Authorization: Bearer {token}" \
+  -d "user1,user2,user3"
+```
+</CodeGroup>
+
+## Stream Games by IDs
+
+Create a stream of games by their IDs.
+
+```bash
+POST /api/stream/games/{streamId}
+```
+
+<ParamField path="streamId" type="string" required>
+  Unique identifier for this stream
+</ParamField>
+
+<ParamField body="gameIds" type="string" required>
+  Comma-separated game IDs (max 500-10000 depending on account)
+</ParamField>
+
+### Add Games to Stream
+
+Add more games to an existing stream.
+
+```bash
+POST /api/stream/games/{streamId}/add
+```
+
+<CodeGroup>
+```bash Create Stream
+curl -X POST https://lichess.org/api/stream/games/mystream1 \
+  -H "Content-Type: text/plain" \
+  -d "gameId1,gameId2"
+```
+
+```bash Add to Stream
+curl -X POST https://lichess.org/api/stream/games/mystream1/add \
+  -H "Content-Type: text/plain" \
+  -d "gameId3,gameId4"
+```
+</CodeGroup>
+
+## Stream Games by OAuth Origin
+
+Stream games created by users via your OAuth application.
+
+```bash
+GET /api/stream/games/by-oauth-origin
+```
+
+Requires OAuth authentication.
+
+<ParamField query="since" type="timestamp">
+  Filter games since timestamp
+</ParamField>
+
+<ParamField query="extraUsers" type="string">
+  Comma-separated user IDs to include
+</ParamField>
+
+## Current Game of User
+
+Get the ongoing game of a user.
+
+```bash
+GET /api/user/{username}/current-game
+```
+
+<ParamField path="username" type="string" required>
+  Username of the player
+</ParamField>
+
+Returns PGN of the current game or 404 if not playing.
+
+## Cloud Evaluation
+
+Get cloud evaluation for a position.
+
+```bash
+GET /api/cloud-eval
+```
+
+<ParamField query="fen" type="string" required>
+  FEN string of the position
+</ParamField>
+
+<ParamField query="variant" type="string" default="standard">
+  Chess variant
+</ParamField>
+
+<ParamField query="multiPv" type="integer" default="1">
+  Number of principal variations (1-5)
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl "https://lichess.org/api/cloud-eval?fen=rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR%20w%20KQkq%20-%200%201&multiPv=3"
+```
+</CodeGroup>
+
+<ResponseExample>
+```json
+{
+  "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+  "knodes": 12500,
+  "depth": 35,
+  "pvs": [
+    {
+      "moves": "e2e4 c7c5 g1f3",
+      "cp": 25
+    },
+    {
+      "moves": "d2d4 d7d5 c2c4",
+      "cp": 23
+    },
+    {
+      "moves": "g1f3 g8f6 c2c4",
+      "cp": 22
+    }
+  ]
+}
+```
+</ResponseExample>
+
+## Import Game
+
+Import a game from PGN.
+
+```bash
+POST /api/import
+```
+
+<ParamField body="pgn" type="string" required>
+  The PGN of the game
+</ParamField>
+
+Requires authentication.
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://lichess.org/api/import \
+  -H "Authorization: Bearer {token}" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d 'pgn=[Event "Casual Game"]...'
+```
+</CodeGroup>
+
+## Add Time to Game
+
+Add time to a player's clock during a game.
+
+```bash
+POST /api/round/{gameId}/add-time/{seconds}
+```
+
+<ParamField path="gameId" type="string" required>
+  The game ID
+</ParamField>
+
+<ParamField path="seconds" type="integer" required>
+  Number of seconds to add (max 15)
+</ParamField>
+
+Requires Board or Bot OAuth scope.
+
+## Bookmark Game
+
+Add or remove a game bookmark.
+
+```bash
+POST /bookmark/{gameId}
+```
+
+<ParamField path="gameId" type="string" required>
+  The game ID
+</ParamField>
+
+<ParamField query="v" type="boolean">
+  true to bookmark, false to remove bookmark
+</ParamField>
+
+## Delete Imported Game
+
+Delete a game you imported.
+
+```bash
+POST /{gameId}/delete
+```
+
+<ParamField path="gameId" type="string" required>
+  The game ID
+</ParamField>
+
+Only works for games imported by the authenticated user.
+
+## Response Fields
+
+<ResponseField name="id" type="string">
+  8-character game ID
+</ResponseField>
+
+<ResponseField name="rated" type="boolean">
+  Whether the game affects ratings
+</ResponseField>
+
+<ResponseField name="variant" type="string">
+  Chess variant (standard, chess960, crazyhouse, etc.)
+</ResponseField>
+
+<ResponseField name="speed" type="string">
+  Time control category (bullet, blitz, rapid, classical)
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Game status (started, mate, resign, stalemate, timeout, draw, outoftime, cheat, noStart, unknownFinish, variantEnd)
+</ResponseField>
+
+<ResponseField name="players" type="object">
+  Information about white and black players
+</ResponseField>
+
+<ResponseField name="winner" type="string">
+  Winner color (white or black), absent if draw
+</ResponseField>
+
+<ResponseField name="moves" type="string">
+  Game moves in UCI format
+</ResponseField>
+
+<ResponseField name="opening" type="object">
+  Opening information (eco, name, ply)
+</ResponseField>
+
+<ResponseField name="clock" type="object">
+  Clock settings (initial, increment, totalTime)
+</ResponseField>

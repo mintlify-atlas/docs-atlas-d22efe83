@@ -1,0 +1,459 @@
+---
+title: User Module
+description: User accounts, authentication, profiles, and performance tracking
+---
+
+The **user** module manages user accounts, authentication, profiles, performance ratings, and user-related data. It's a core dependency for nearly every other module.
+
+## Core Types
+
+### User
+
+The primary user type from `modules/user/src/main/User.scala`:
+
+```scala
+package lila.user
+
+case class WithPerfsAndEmails(user: UserWithPerfs, emails: Emails)
+
+opaque type TotpToken = String
+object TotpToken extends OpaqueString[TotpToken]
+
+case class UserDelete(requested: Instant, done: Boolean = false)
+
+case class ClosedFlags(forever: Boolean, deleted: Boolean)
+```
+
+### Username Rules
+
+```scala
+object nameRules:
+  // what new usernames should be like
+  val newUsernameRegex = "(?i)[a-z][a-z0-9_-]{0,28}[a-z0-9]".r
+  val newUsernamePrefix = "(?i)^[a-z].*".r
+  val newUsernameSuffix = "(?i).*[a-z0-9]$".r
+  val newUsernameChars = "(?i)^[a-z0-9_-]*$".r
+  val newUsernameLetters = "(?i)^([a-z0-9][_-]?)+$".r
+```
+
+Username constraints:
+- 2-30 characters
+- Must start with a letter
+- Must end with a letter or number
+- Can contain letters, numbers, underscores, and hyphens
+- No consecutive special characters
+
+### PlayTime
+
+```scala
+object PlayTime:
+  extension (p: PlayTime)
+    def totalDuration = Duration.ofSeconds(p.total)
+    def tvDuration = Duration.ofSeconds(p.tv)
+    def nonEmptyTvDuration = Option.when(p.tv > 0)(p.tvDuration)
+```
+
+## Key Components
+
+### UserApi
+
+The main API for user operations from `modules/user/src/main/UserApi.scala`:
+
+```scala
+final class UserApi(
+    userRepo: UserRepo, 
+    perfsRepo: UserPerfsRepo, 
+    cacheApi: CacheApi
+)(using Executor) extends lila.core.user.UserApi:
+
+  export userRepo.{
+    byId,
+    byIds,
+    byIdAs,
+    me,
+    email,
+    emailOrPrevious,
+    pair,
+    getTitle,
+    enabledById,
+    enabledByIds,
+    createdAtById,
+    isEnabled,
+    filterClosedOrInactiveIds,
+    isKid,
+    langOf,
+    isBot,
+    isTroll,
+    isManaged,
+    filterDisabled,
+    countEngines,
+    filterEngines,
+    firstGetsWhite,
+    incColor,
+    mustPlayAsColor,
+    userIdsWithRoles,
+    containsDisabled,
+    containsEngine,
+    filterLame,
+    filterExists,
+    filterKid,
+    incToints,
+    setPlan,
+    filterByEnabledPatrons,
+    isCreatedSince,
+    accountAge
+  }
+  
+  export perfsRepo.{
+    perfOf,
+    perfsOf,
+    setPerf,
+    dubiousPuzzle,
+    glicko,
+    withPerf,
+    usingPerfOf,
+    perfOptionOf,
+    addPuzRun,
+    withPerfs
+  }
+  
+  export gamePlayers.{ 
+    apply as gamePlayersAny, 
+    loggedIn as gamePlayersLoggedIn 
+  }
+```
+
+### Game Players Cache
+
+High-performance caching for game participants:
+
+```scala
+// Hit by game rounds - heavily cached
+object gamePlayers:
+  private type PlayersKey = (PairOf[Option[UserId]], PerfKey)
+
+  def apply(userIds: ByColor[Option[UserId]], perf: PerfKey): Fu[GameUsers] =
+    cache.get(userIds.toPair -> perf)
+
+  def loggedIn(userIds: ByColor[UserId], perf: PerfKey): Fu[GameUsers.LoggedIn] =
+    apply(userIds.map(_.some), perf).dmap(_.requireLogged)
+```
+
+### UserRepo
+
+Repository for user persistence:
+
+```scala
+// Common queries
+def byId(id: UserId): Fu[Option[User]]
+def byIds(ids: Iterable[UserId]): Fu[List[User]]
+def enabledById(id: UserId): Fu[Option[User]]
+def email(id: UserId): Fu[Option[EmailAddress]]
+
+// Filtering
+def filterDisabled(ids: Iterable[UserId]): Fu[Set[UserId]]
+def filterEngines(ids: Iterable[UserId]): Fu[Set[UserId]]
+def filterKid(userIds: Set[UserId]): Fu[Set[UserId]]
+
+// Status checks
+def isEnabled(id: UserId): Fu[Boolean]
+def isBot(id: UserId): Fu[Boolean]
+def isTroll(id: UserId): Fu[Boolean]
+def isKid(id: UserId): Fu[Boolean]
+```
+
+### UserPerfsRepo
+
+Manages user performance ratings:
+
+```scala
+final class UserPerfsRepo(coll: Coll)(using Executor):
+  
+  def perfOf(userId: UserId, perfKey: PerfKey): Fu[Perf]
+  
+  def perfsOf(userId: UserId): Fu[UserPerfs]
+  
+  def setPerf(userId: UserId, perfKey: PerfKey, perf: Perf): Funit
+  
+  def withPerf[U: UserIdOf](u: U, perfKey: PerfKey): Fu[WithPerf]
+  
+  def withPerfs(user: User): Fu[UserWithPerfs]
+```
+
+## Authentication
+
+### UserAuth
+
+Handles user authentication logic:
+
+```scala
+// From modules/user/src/main/UserAuth.scala
+case class AuthData(
+    bpass: HashedPassword,
+    salt: Option[String] = None,
+    sha512: Option[Boolean] = None
+)
+
+trait UserAuth:
+  def authenticate(username: UserStr, password: ClearPassword): Fu[Option[User]]
+  def authenticateById(id: UserId, password: ClearPassword): Fu[Option[User]]
+```
+
+### Two-Factor Authentication
+
+```scala
+// From modules/user/src/main/TotpSecret.scala
+opaque type TotpSecret = String
+
+object TotpSecret:
+  def random: TotpSecret = ???
+  
+  extension (s: TotpSecret)
+    def verify(token: TotpToken): Boolean = ???
+    def toUri(user: User): String = ???
+```
+
+## Profile & Preferences
+
+### Profile
+
+```scala
+// From modules/user/src/main/Profile.scala
+case class Profile(
+    country: Option[String],
+    location: Option[String],
+    bio: Option[String],
+    firstName: Option[String],
+    lastName: Option[String],
+    fideRating: Option[Int],
+    uscfRating: Option[Int],
+    ecfRating: Option[Int],
+    links: Option[String]
+)
+```
+
+### User Links
+
+```scala
+case class Links(value: List[Link])
+
+case class Link(
+    site: Link.Site,
+    url: String
+)
+
+object Link:
+  enum Site:
+    case Twitter, Facebook, YouTube, Twitch, GitHub, VK, Chess, FIDE
+```
+
+## User Flags & Marks
+
+### Flags
+
+```scala
+// From modules/user/src/main/Flags.scala
+case class Flags(
+    engine: Boolean = false,
+    boost: Boolean = false,
+    troll: Boolean = false,
+    ipban: Boolean = false,
+    disabled: Boolean = false,
+    closed: Boolean = false,
+    reportban: Boolean = false,
+    rankban: Boolean = false
+)
+```
+
+### Kid Mode
+
+```scala
+opaque type KidMode = Boolean
+
+object KidMode:
+  extension (k: KidMode)
+    def enabled: Boolean = k
+    def disabled: Boolean = !k
+
+case class SetKidMode(v: Boolean)
+```
+
+## Trophies & Achievements
+
+### Trophy System
+
+```scala
+// From modules/user/src/main/Trophy.scala
+case class Trophy(
+    id: String,
+    user: UserId,
+    kind: Trophy.Kind,
+    date: Instant
+)
+
+object Trophy:
+  enum Kind:
+    case MarathonWinner
+    case MarathonTopTen
+    case MarathonTopFifty
+    case BotMaker
+    case Developer
+    case Moderator
+    case Verified
+    // ... many more
+```
+
+### TrophyApi
+
+```scala
+final class TrophyApi(coll: Coll)(using Executor):
+  
+  def findByUser(user: User, max: Int = 12): Fu[List[Trophy]]
+  
+  def award(userId: UserId, kind: Trophy.Kind): Funit
+  
+  def remove(userId: UserId, kind: Trophy.Kind): Funit
+```
+
+## Rankings
+
+### RankingApi
+
+```scala
+final class RankingApi(
+    userRepo: UserRepo,
+    cacheApi: CacheApi
+)(using Executor):
+  
+  def topPerf(perfKey: PerfKey, nb: Int): Fu[List[User.LightPerf]]
+  
+  def topOnline(nb: Int): Fu[List[User]]
+  
+  def fetchLeaderboard(perfKey: PerfKey): Fu[Leaderboard]
+```
+
+## Lightweight User Data
+
+### LightUserApi
+
+For performance, many operations use lightweight user data:
+
+```scala
+final class LightUserApi(
+    repo: UserRepo,
+    cacheApi: CacheApi
+)(using Executor):
+  
+  def async(id: UserId): Fu[Option[LightUser]]
+  
+  def sync(id: UserId): Option[LightUser]
+  
+  def asyncMany(ids: List[UserId]): Fu[List[LightUser]]
+  
+  def preload(ids: Seq[UserId]): Funit
+
+case class LightUser(
+    id: UserId,
+    name: UserName,
+    title: Option[PlayerTitle],
+    isPatron: Boolean
+)
+```
+
+## Notes System
+
+### NoteApi
+
+Moderators can add notes to user accounts:
+
+```scala
+// From modules/user/src/main/NoteApi.scala
+final class NoteApi(coll: Coll)(using Executor):
+  
+  def get(user: User, me: User, myFlair: Option[Flair]): Fu[List[Note]]
+  
+  def write(
+      to: User, 
+      text: String, 
+      from: User,
+      modOnly: Boolean,
+      dox: Boolean
+  ): Funit
+  
+  def byUserForMod(userId: UserId): Fu[List[Note]]
+```
+
+## Flair System
+
+```scala
+// From modules/user/src/main/FlairApi.scala
+final class FlairApi(coll: Coll, cacheApi: CacheApi)(using Executor):
+  
+  def get(user: User): Fu[Option[Flair]]
+  
+  def set(user: User, flair: Option[Flair]): Funit
+```
+
+## Module Dependencies
+
+### Dependencies
+- **db** - Database layer
+- **memo** - Caching
+- **common** - Utilities
+- **core** - Core types
+- **rating** - Rating system
+
+### Dependents
+Almost every module depends on user:
+- **game** - Player identification
+- **tournament** - Participant management
+- **chat** - Chat permissions
+- **security** - Authentication
+- **mod** - Moderation actions
+
+## Caching Strategy
+
+The user module uses aggressive caching:
+
+```scala
+// From modules/user/src/main/Cached.scala
+final class Cached(
+    userRepo: UserRepo,
+    cacheApi: CacheApi
+)(using Executor):
+  
+  val rankingsOf = cacheApi.sync[PerfKey, Map[UserId, Int]](
+    name = "user.rankingsOf",
+    compute = perfKey => computeRankings(perfKey),
+    default = _ => Map.empty,
+    expireAfter = _.ExpireAfterWrite(15 minutes)
+  )
+```
+
+## Testing
+
+```scala
+// From modules/user/src/test/UserTest.scala
+class UserTest extends munit.FunSuite:
+  
+  test("username validation"):
+    assert(nameRules.newUsernameRegex.matches("alice123"))
+    assert(!nameRules.newUsernameRegex.matches("a"))
+    assert(!nameRules.newUsernameRegex.matches("_alice"))
+  
+  test("TOTP verification"):
+    val secret = TotpSecret.random
+    val token = secret.currentToken
+    assert(secret.verify(token))
+```
+
+## Related Modules
+
+<CardGroup cols={2}>
+  <Card title="Security Module" icon="shield" href="/modules/security">
+    Authentication and security features
+  </Card>
+  <Card title="Mod Module" icon="gavel" href="/modules/mod">
+    User moderation and admin tools
+  </Card>
+</CardGroup>

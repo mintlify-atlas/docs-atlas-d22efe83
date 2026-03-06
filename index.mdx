@@ -1,97 +1,151 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Lichess Developer Documentation"
+description: "Free, open-source online chess server with realtime gameplay, tournaments, puzzles, and analysis tools"
 ---
 
-## Setting up
+<div style={{
+  background: 'linear-gradient(135deg, #1a1713 0%, #2a2520 100%)',
+  borderRadius: '6px',
+  border: '1px solid rgba(255, 165, 0, 0.8)',
+  padding: '48px 32px',
+  marginBottom: '32px'
+}}>
+  <h1 style={{
+    fontSize: '48px',
+    fontWeight: '700',
+    color: '#d7d7d7',
+    marginBottom: '16px',
+    fontFamily: 'Inter'
+  }}>Welcome to Lichess</h1>
+  <p style={{
+    fontSize: '18px',
+    color: '#b0b0b0',
+    marginBottom: '24px',
+    fontFamily: 'Inter'
+  }}>
+    The forever free, ad-free, and open-source chess server. Built with Scala, TypeScript, and a passion for chess.
+  </p>
+  <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+    <a 
+      href="/quickstart"
+      style={{
+        background: 'transparent',
+        color: '#3a8ee6',
+        padding: '12px 24px',
+        borderRadius: '4px',
+        border: '1px solid #3a8ee6',
+        textDecoration: 'none',
+        fontWeight: '600',
+        fontFamily: 'Inter'
+      }}
+    >
+      Get Started
+    </a>
+    <a 
+      href="https://github.com/lichess-org/lila"
+      style={{
+        background: '#3a3a3a',
+        color: '#b0b0b0',
+        padding: '12px 24px',
+        borderRadius: '4px',
+        textDecoration: 'none',
+        fontWeight: '600',
+        fontFamily: 'Inter'
+      }}
+    >
+      View on GitHub
+    </a>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+## What is Lichess?
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+Lichess (li[chess in sca]la) is a free online chess game server focused on realtime gameplay and ease of use. With over 4.7 billion games in its database, Lichess serves millions of chess players worldwide completely free of charge, with no ads.
 
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Real-time Gameplay" icon="chess-board" href="/features/gameplay">
+    Play chess in real-time with players around the world
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Computer Analysis" icon="microchip" href="/features/analysis">
+    Analyze games with Stockfish distributed across donated servers
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Tournaments & Simuls" icon="trophy" href="/features/tournaments">
+    Compete in tournaments or play simultaneous exhibitions
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Puzzle Training" icon="puzzle-piece" href="/features/puzzles">
+    Improve your tactics with the puzzle trainer
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Technology Stack
 
-Everything you need to create world-class documentation.
+Lichess is built with modern, performant technologies chosen for scalability and developer experience.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={3}>
+  <Card title="Scala 3" icon="code">
+    Backend built with Scala 3 and Play Framework 2.8
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="TypeScript" icon="js">
+    Frontend written in TypeScript with Snabbdom
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="MongoDB" icon="database">
+    4.7+ billion games stored and indexed
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="Redis" icon="bolt">
+    Real-time communication via Redis
   </Card>
-</Columns>
+  <Card title="Stockfish" icon="brain">
+    Chess engine analysis cluster
+  </Card>
+  <Card title="WebSockets" icon="arrows-rotate">
+    Separate WebSocket server for real-time features
+  </Card>
+</CardGroup>
 
-## Need inspiration?
+## Quick Links
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<CardGroup cols={2}>
+  <Card title="Setup Development Environment" icon="laptop-code" href="/development/setup">
+    Get your local development environment running
+  </Card>
+  <Card title="Architecture Overview" icon="diagram-project" href="/architecture">
+    Understand how Lichess components work together
+  </Card>
+  <Card title="HTTP API Reference" icon="api" href="/api/overview">
+    Integrate with Lichess using our public API
+  </Card>
+  <Card title="Contributing Guide" icon="users" href="/development/contributing">
+    Join the open-source community and contribute
+  </Card>
+</CardGroup>
+
+## Key Features
+
+- **4.7+ billion games** stored in MongoDB and indexed by Elasticsearch
+- **140+ languages** supported through community translations
+- **Fully asynchronous** using Scala Futures and Akka streams
+- **Distributed analysis** with Stockfish via the Fishnet cluster
+- **Free PGN database** with all rated games published openly
+- **Mobile apps** for iOS and Android
+- **Zero ads, forever free** supported by donations
+
+## Community & Support
+
+<CardGroup cols={2}>
+  <Card title="GitHub Discussions" icon="github" href="https://github.com/lichess-org/lila/discussions">
+    Ask questions and discuss features
+  </Card>
+  <Card title="Discord Community" icon="discord" href="https://discord.gg/lichess">
+    Join the Lichess developer community
+  </Card>
+  <Card title="Report Issues" icon="bug" href="https://github.com/lichess-org/lila/issues">
+    Report bugs and request features
+  </Card>
+  <Card title="Translate" icon="language" href="https://crowdin.com/project/lichess">
+    Help translate Lichess into your language
+  </Card>
+</CardGroup>
+
+## License
+
+Lichess is licensed under the GNU Affero General Public License 3 or any later version at your choice. All code is open-source and available on [GitHub](https://github.com/lichess-org/lila).

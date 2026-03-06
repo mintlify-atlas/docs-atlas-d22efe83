@@ -1,0 +1,480 @@
+---
+title: Study & Shared Analysis
+description: Explore Lichess Studies - collaborative analysis boards with chapters, annotations, and real-time collaboration
+icon: book
+---
+
+## Overview
+
+Lichess Studies provide powerful tools for analyzing games, creating chess lessons, and collaborating with others in real-time. Studies support multiple chapters, rich annotations, variations, and can be shared publicly or kept private.
+
+## Study Data Model
+
+```scala
+// modules/study/src/main/Study.scala:11
+case class Study(
+    id: StudyId,
+    name: StudyName,
+    members: StudyMembers,
+    position: Position.Ref,      // Current chapter and path
+    ownerId: UserId,
+    visibility: Visibility,      // public, unlisted, or private
+    settings: Settings,
+    from: Study.From,            // Source (scratch, game, relay)
+    likes: Study.Likes,
+    description: Option[String] = None,
+    topics: Option[StudyTopics] = None,
+    flair: Option[Flair] = None,
+    createdAt: Instant,
+    updatedAt: Instant
+):
+  val slug = scalalib.StringOps.slug(name.value)
+  
+  def owner = members.get(ownerId)
+  
+  def isOwner[U: UserIdOf](u: U) = ownerId.is(u)
+  
+  def canContribute[U: UserIdOf](u: U): Boolean =
+    isOwner(u) || members.get(u.id).exists(_.canContribute) || 
+      u.is(UserId.lichess)
+  
+  def canView(id: Option[UserId]) = !isPrivate || id.exists(members.contains)
+```
+
+## Study Creation
+
+### From Scratch
+
+```scala
+// modules/study/src/main/Study.scala:159
+def make(
+    user: User,
+    from: From,
+    id: Option[StudyId] = None,
+    name: Option[StudyName] = None,
+    settings: Option[Settings] = None
+) =
+  val owner = StudyMember(id = user.id, role = StudyMember.Role.Write)
+  Study(
+    id = id | makeId,
+    name = name | StudyName(s"${user.username}'s Study"),
+    members = StudyMembers(Map(user.id -> owner)),
+    position = Position.Ref(StudyChapterId(""), UciPath.root),
+    ownerId = user.id,
+    visibility = Visibility.unlisted,
+    settings = settings | Settings.init,
+    from = from,
+    likes = Likes(1),
+    createdAt = nowInstant,
+    updatedAt = nowInstant
+  )
+```
+
+### From Game
+
+```scala
+enum From:
+  case Scratch
+  case Game(id: GameId)          // Import from finished game
+  case Study(id: StudyId)        // Clone existing study  
+  case Relay(clonedFrom: Option[StudyId])  // Broadcast relay
+```
+
+<Steps>
+
+<Step title="Select Source">
+  Create new study or import from a game
+</Step>
+
+<Step title="Set Visibility">
+  Choose public, unlisted, or private
+</Step>
+
+<Step title="Configure Settings">
+  Enable computer analysis, explorer, chat, etc.
+</Step>
+
+<Step title="Add Content">
+  Create chapters with analysis and annotations
+</Step>
+
+</Steps>
+
+## Chapters
+
+Studies contain multiple chapters:
+
+```scala
+// modules/study/src/main/Chapter.scala
+case class Chapter(
+    id: StudyChapterId,
+    studyId: StudyId,
+    name: StudyChapterName,
+    setup: Chapter.Setup,        // Initial position or game
+    root: Node.Root,             // Move tree with variations
+    tags: Tags,                  // PGN tags (Event, White, Black, etc.)
+    order: Int,
+    ownerId: UserId,
+    practice: Option[Boolean],
+    gamebook: Option[Boolean],
+    conceal: Option[Ply],
+    createdAt: Instant
+)
+```
+
+### Chapter Features
+
+- **PGN Import**: Import games in PGN format
+- **FEN Positions**: Start from custom positions
+- **Variations**: Build move trees with alternatives
+- **Annotations**: Add comments, glyphs, and arrows
+- **Analysis**: Request computer analysis
+- **Gamebook**: Interactive lesson mode
+- **Practice**: Test positions with feedback
+
+## Study Settings
+
+```scala
+// modules/study/src/main/Settings.scala
+case class Settings(
+    computer: Settings.UserSelection,    // Who can use computer analysis
+    explorer: Settings.UserSelection,    // Who can use opening explorer  
+    cloneable: Settings.UserSelection,   // Who can clone the study
+    shareable: Settings.UserSelection,   // Who can export/share
+    chat: Settings.UserSelection,        // Who can use study chat
+    sticky: Boolean,                     // Auto-sync all members to presenter
+    description: Boolean                 // Show description panel
+)
+
+enum UserSelection:
+  case Nobody, Owner, Contributor, Member, Everyone
+```
+
+<CodeGroup>
+
+```scala Settings Configuration
+case class Data(
+    name: String,
+    flair: Option[String],
+    visibility: Visibility,
+    computer: Settings.UserSelection,
+    explorer: Settings.UserSelection,
+    cloneable: Settings.UserSelection,
+    shareable: Settings.UserSelection,
+    chat: Settings.UserSelection,
+    sticky: String,
+    description: String
+):
+  def settings =
+    Settings(
+      computer, explorer, cloneable, shareable, chat,
+      sticky == "true",
+      description == "true"
+    )
+```
+
+```scala Access Control
+def canChat(id: UserId) = 
+  Settings.UserSelection.allows(settings.chat, this, id.some)
+
+def canContribute[U: UserIdOf](u: U): Boolean =
+  isOwner(u) || 
+  members.get(u.id).exists(_.canContribute) || 
+  u.is(UserId.lichess)
+```
+
+</CodeGroup>
+
+## Collaborative Features
+
+### Member Roles
+
+```scala
+// modules/study/src/main/StudyMember.scala
+enum Role:
+  case Read        // View only
+  case Write       // Can edit and add chapters
+  
+case class StudyMember(
+    id: UserId,
+    role: Role,
+    addedAt: Option[Instant]
+):
+  def canContribute = role == Role.Write
+```
+
+### Real-Time Synchronization
+
+When "Sync" is enabled:
+- All members see the same position
+- Presenter's moves broadcast to everyone
+- Ideal for lessons and demonstrations
+
+```scala
+// modules/study/src/main/Study.scala:46
+def isCurrent(c: Chapter.Like) = c.id == position.chapterId
+
+def rewindTo(chapterId: StudyChapterId): Study =
+  copy(position = Position.Ref(chapterId = chapterId, path = UciPath.root))
+```
+
+## Move Tree & Variations
+
+Chapters use a tree structure for variations:
+
+```scala
+// modules/study/src/main/Node.scala
+// Tree structure:
+// - Root node (starting position)
+// - Main line (primary variation)
+// - Alternative variations (sidelines)
+// - Comments at each node
+// - Glyphs (!, ?, !!, etc.)
+// - Arrows and highlights
+```
+
+### Adding Moves
+
+```scala
+// modules/study/src/main/AnaMove.scala
+// Handles move addition to study:
+// - Validates move legality
+// - Adds to appropriate tree position
+// - Broadcasts to connected members
+// - Triggers analysis if enabled
+```
+
+<Info>
+  Studies support unlimited variations, allowing comprehensive analysis of complex positions.
+</Info>
+
+## Computer Analysis in Studies
+
+Request Stockfish analysis for study chapters:
+
+```scala
+// modules/fishnet/src/main/Analyser.scala:86
+def study(req: lila.core.fishnet.Bus.StudyChapterRequest): Fu[Analyser.Result] =
+  analysisRepo.chapterExists(req.chapterId)
+    .flatMap:
+      if _ then fuccess(Analyser.Result.NoChapter)
+      else
+        val sender = Sender(req.userId, none, mod = false, system = false)
+        val limitFu =
+          if req.official then fuccess(Analyser.Result.Ok)
+          else limiter(sender, ignoreConcurrentCheck = true, ownGame = false)
+        limitFu.flatMap: result =>
+          val work = makeWork(
+            game = Work.Game(
+              id = chapterId.value,
+              initialFen = initialFen,
+              studyId = studyId.some,
+              variant = variant,
+              moves = moves.take(maxPlies).map(_.uci).mkString(" ")
+            ),
+            startPly = Ply(initialFen.map(_.colorOrWhite).so(_.fold(0, 1))),
+            sender = sender,
+            origin = if req.official then Origin.officialBroadcast 
+                     else Origin.manualRequest
+          )
+```
+
+<Warning>
+  Study chapter analysis is subject to the same rate limits as game analysis, except for official broadcasts.
+</Warning>
+
+## Study Topics
+
+Organize studies with topics:
+
+```scala
+// modules/study/src/main/Study.scala:87
+def topicsOrEmpty = topics | StudyTopics.empty
+
+def addTopics(ts: StudyTopics) =
+  copy(
+    topics = topics.fold(ts)(_ ++ ts).some
+  )
+```
+
+Topics help users discover related studies:
+- Opening names (Sicilian, French, etc.)
+- Endgame types (Rook endgames, Pawn endgames)
+- Player names (Kasparov, Fischer)
+- Tournament names (World Championship)
+- Strategic themes (Minority attack, Pawn storm)
+
+## Study Visibility
+
+```scala
+// modules/study/src/main/Study.scala:52
+def isPublic = visibility == Visibility.public      // Listed on site
+def isUnlisted = visibility == Visibility.unlisted  // Link-only access
+def isPrivate = visibility == Visibility.`private`  // Members only
+```
+
+<CardGroup cols={3}>
+  <Card title="Public" icon="globe">
+    Listed in study search, anyone can view
+  </Card>
+  <Card title="Unlisted" icon="link">
+    Only accessible via direct link
+  </Card>
+  <Card title="Private" icon="lock">
+    Only members can view
+  </Card>
+</CardGroup>
+
+## Study Likes & Ranking
+
+```scala
+// modules/study/src/main/Study.scala:110
+opaque type Likes = Int
+
+case class Liking(likes: Likes, me: Boolean)
+
+opaque type Rank = Instant
+object Rank extends OpaqueInstant[Rank]:
+  def compute(likes: Likes, createdAt: Instant) =
+    Rank(createdAt.plusHours(likesToHours(likes)))
+  private def likesToHours(likes: Likes): Int =
+    if likes < 1 then 0
+    else (5 * math.log(likes) + 1).toInt.min(likes) * 24
+
+def notable = likes.value > 10 || {
+  likes.value > 5 && createdAt.isBefore(nowInstant.minusDays(7))
+}
+```
+
+Studies with more likes:
+- Rank higher in search
+- Appear in "Popular Studies"
+- Get featured more prominently
+
+## Cloning Studies
+
+```scala
+// modules/study/src/main/Study.scala:68
+def cloneFor(user: User): Study =
+  val owner = StudyMember(id = user.id, role = StudyMember.Role.Write)
+  copy(
+    id = Study.makeId,
+    members = StudyMembers(Map(user.id -> owner)),
+    ownerId = owner.id,
+    visibility = Visibility.`private`,
+    from = Study.From.Study(id),
+    likes = Likes(1),
+    createdAt = nowInstant,
+    updatedAt = nowInstant
+  )
+```
+
+Cloning allows:
+- Personal copy of public studies
+- Starting point for your own analysis
+- Preserving content that might be deleted
+
+<Note>
+  Cloned studies are always created as private. You can change visibility after cloning.
+</Note>
+
+## Broadcast Relays
+
+Live tournament broadcasts use studies:
+
+```scala
+// modules/study/src/main/Study.scala:60
+def isRelay = from match
+  case _: From.Relay => true
+  case _ => false
+
+def configureForOngoingRelay = copy(
+  settings = settings.copy(
+    computer = Settings.UserSelection.Nobody,
+    explorer = Settings.UserSelection.Nobody
+  )
+)
+```
+
+Relay features:
+- Automatic game import from tournament feeds
+- Real-time move updates
+- Computer analysis disabled during live games
+- Multiple concurrent boards
+
+## PGN Export
+
+```scala
+// modules/study/src/main/PgnDump.scala
+// Export studies to PGN format:
+// - All chapters in one file
+// - Variations included
+// - Comments preserved
+// - Tags maintained
+// - Standard PGN compliance
+```
+
+Export formats:
+- **PGN**: Standard notation with variations
+- **FEN**: Position snapshots
+- **GIF**: Animated game replay
+
+## Gamebook Mode
+
+Interactive lesson mode:
+
+```scala
+gamebook: Option[Boolean]
+
+// Gamebook features:
+// - Hides future moves
+// - Requires correct move to proceed
+// - Provides feedback on mistakes
+// - Ideal for teaching
+```
+
+Perfect for:
+- Opening repertoires
+- Endgame training
+- Tactical lessons
+- Step-by-step courses
+
+## Study Limitations
+
+```scala
+// modules/study/src/main/Study.scala:103
+val maxChapters = Max(64)
+
+val previewNbMembers = 4
+val previewNbChapters = 4
+```
+
+<Warning>
+  Studies are limited to 64 chapters to maintain performance. Create multiple studies for larger collections.
+</Warning>
+
+## Code References
+
+- Study model: `modules/study/src/main/Study.scala:11`
+- Chapter structure: `modules/study/src/main/Chapter.scala`
+- Move handling: `modules/study/src/main/AnaMove.scala`
+- PGN export: `modules/study/src/main/PgnDump.scala`
+- Settings: `modules/study/src/main/Settings.scala`
+- Chapter creation: `modules/study/src/main/ChapterMaker.scala`
+
+## Related Features
+
+<CardGroup cols={2}>
+  <Card title="Analysis" icon="chart-line" href="/features/analysis">
+    Request computer analysis for studies
+  </Card>
+  <Card title="Broadcasts" icon="tower-broadcast" href="/modules/relay">
+    Live tournament relay system
+  </Card>
+  <Card title="Gameplay" icon="chess-pawn" href="/features/gameplay">
+    Import games into studies
+  </Card>
+  <Card title="Teams" icon="users" href="/modules/team">
+    Share team studies with members
+  </Card>
+</CardGroup>

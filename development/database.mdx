@@ -1,0 +1,496 @@
+---
+title: Database Setup
+description: MongoDB configuration and database setup for Lila development
+---
+
+## MongoDB Overview
+
+Lichess uses MongoDB as its primary database, storing:
+
+- **4.7+ billion games** in production
+- User profiles and preferences
+- Tournament and swiss event data
+- Studies and analysis
+- Puzzles and training data
+- Chat messages and reports
+
+## MongoDB Version
+
+Lila uses **ReactiveMongo 1.1.0-RC20** as the MongoDB driver:
+
+```scala
+// project/Dependencies.scala
+object reactivemongo {
+  val rmVersion = "1.1.0-RC20"
+  val driver = "org.reactivemongo" %% "reactivemongo" % rmVersion
+  val stream = "org.reactivemongo" %% "reactivemongo-akkastream" % rmVersion
+  val shaded = "org.reactivemongo" % s"reactivemongo-shaded-native-$os-$dashArch" % rmVersion
+  def bundle = Seq(driver, stream)
+}
+```
+
+**Recommended MongoDB version**: 4.0 or later
+
+## Installation
+
+### Linux (Ubuntu/Debian)
+
+```bash
+# Import MongoDB public key
+wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | sudo apt-key add -
+
+# Add MongoDB repository
+echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse" | \
+  sudo tee /etc/apt/sources.list.d/mongodb-org-6.0.list
+
+# Install MongoDB
+sudo apt-get update
+sudo apt-get install -y mongodb-org
+
+# Start MongoDB
+sudo systemctl start mongod
+sudo systemctl enable mongod
+```
+
+### macOS
+
+```bash
+# Using Homebrew
+brew tap mongodb/brew
+brew install mongodb-community
+
+# Start MongoDB
+brew services start mongodb-community
+```
+
+### Docker
+
+```bash
+# Run MongoDB in Docker
+docker run -d \
+  --name lila-mongodb \
+  -p 27017:27017 \
+  -v lila-mongo-data:/data/db \
+  mongo:6.0
+```
+
+## Configuration
+
+### Default Connection
+
+In `conf/base.conf`:
+
+```hocon
+mongodb {
+  uri = "mongodb://127.0.0.1:27017?appName=lila"
+  mongo-async-driver = ${akka}
+  yolo {
+    uri = ${mongodb.uri}
+    # Alternative with timeouts:
+    # uri = "mongodb://127.0.0.1:27010?appName=lila&connectTimeoutMS=800&rm.maxNonQueryableHeartbeats=9999"
+  }
+}
+```
+
+### Connection String Parameters
+
+```
+mongodb://[host]:[port]/[database]?[options]
+```
+
+Common options:
+- `appName=lila` - Application identifier
+- `connectTimeoutMS=5000` - Connection timeout
+- `socketTimeoutMS=30000` - Socket timeout
+- `maxPoolSize=100` - Connection pool size
+- `rm.maxNonQueryableHeartbeats=9999` - ReactiveMongo-specific
+
+### Module-Specific Databases
+
+Some modules use separate database configurations:
+
+```hocon
+# Study module
+study.mongodb.uri = ${mongodb.uri}
+
+# Puzzle module
+puzzle {
+  mongodb {
+    uri = ${mongodb.uri}
+  }
+  collection {
+    puzzle = puzzle2_puzzle
+    round = puzzle2_round
+    path = puzzle2_path
+  }
+}
+```
+
+## Collections
+
+Key MongoDB collections:
+
+### Core Collections
+
+```hocon
+# Chat
+chat {
+  collection {
+    chat = chat
+    timeout = chat_timeout
+  }
+}
+
+# Coordinates training
+coordinate {
+  collection {
+    score = coordinate_score
+  }
+}
+
+# Events
+event {
+  collection {
+    event = event
+  }
+}
+
+# Videos
+video {
+  collection {
+    video = video
+    view = video_view
+  }
+}
+```
+
+### Game Data
+
+Games are stored with:
+- **Binary encoding** for moves and clock times
+- **Compression** for older games
+- **Indexing** via Elasticsearch for search
+
+```scala
+// Binary format for efficient storage
+BinaryPiece.encode(piece: Piece): Int
+BinaryMoveTime.encode(moveTime: Int): ByteArray
+BinaryClock.encode(clock: Clock): ByteArray
+```
+
+## Database Operations
+
+### Reactive Queries
+
+Lila uses ReactiveMongo for fully async database access:
+
+```scala
+import reactivemongo.api.bson.*
+import reactivemongo.api.bson.collection.BSONCollection
+
+// Async query
+def findGame(id: GameId): Future[Option[Game]] =
+  collection
+    .find(BSONDocument("_id" -> id.value))
+    .one[Game]
+
+// Async update
+def updateUser(userId: UserId, changes: BSONDocument): Future[Unit] =
+  collection
+    .update.one(
+      q = BSONDocument("_id" -> userId.value),
+      u = BSONDocument("$set" -> changes)
+    )
+    .map(_ => ())
+```
+
+### BSON Handlers
+
+Custom BSON serialization:
+
+```scala
+import reactivemongo.api.bson.*
+
+given BSONDocumentHandler[Game] = Macros.handler[Game]
+
+given BSONHandler[Color] = quickHandler[Color](
+  { case BSONBoolean(true) => Color.White; case _ => Color.Black },
+  color => BSONBoolean(color.white)
+)
+```
+
+### Streaming Large Results
+
+Use Akka Streams for large result sets:
+
+```scala
+import akka.stream.scaladsl.Source
+import reactivemongo.akkastream.cursorProducer
+
+def streamAllGames(): Source[Game, Future[State]] =
+  collection
+    .find(BSONDocument())
+    .cursor[Game]()
+    .documentSource()
+```
+
+## Indexes
+
+Key indexes for performance:
+
+```javascript
+// Game indexes
+db.game5.createIndex({ "us": 1 })  // User games
+db.game5.createIndex({ "ca": -1 }) // Created at
+db.game5.createIndex({ "ra": 1 })  // Rated games
+
+// User indexes
+db.user4.createIndex({ "username": 1 }, { unique: true })
+db.user4.createIndex({ "enabled": 1, "createdAt": -1 })
+
+// Study indexes
+db.study.createIndex({ "ownerId": 1, "createdAt": -1 })
+db.study.createIndex({ "members.userId": 1 })
+```
+
+## Development Database
+
+### Sample Data
+
+For local development, you may want sample data:
+
+```javascript
+// Connect to MongoDB shell
+mongo
+
+use lila
+
+// Create test user
+db.user4.insertOne({
+  _id: "testuser",
+  username: "testuser",
+  enabled: true,
+  createdAt: new Date(),
+  seenAt: new Date(),
+  perfs: {}
+})
+
+// Create test game
+db.game5.insertOne({
+  _id: "testgame1",
+  players: [
+    { uid: "testuser", color: true },
+    { uid: "opponent", color: false }
+  ],
+  createdAt: new Date(),
+  status: 30  // started
+})
+```
+
+### Reset Development Database
+
+```bash
+# Warning: This deletes all data!
+mongo lila --eval "db.dropDatabase()"
+```
+
+## Backup and Restore
+
+### Backup
+
+```bash
+# Dump entire database
+mongodump --db lila --out /path/to/backup
+
+# Dump specific collection
+mongodump --db lila --collection game5 --out /path/to/backup
+```
+
+### Restore
+
+```bash
+# Restore database
+mongorestore --db lila /path/to/backup/lila
+
+# Restore specific collection
+mongorestore --db lila --collection game5 /path/to/backup/lila/game5.bson
+```
+
+## Performance Tuning
+
+### Connection Pool
+
+Adjust pool size based on load:
+
+```hocon
+mongodb {
+  uri = "mongodb://127.0.0.1:27017/lila?maxPoolSize=50&minPoolSize=10"
+}
+```
+
+### Write Concern
+
+For development, you can use relaxed write concerns:
+
+```scala
+import reactivemongo.api.WriteConcern
+
+collection.update
+  .one(
+    q = selector,
+    u = update,
+    writeConcern = WriteConcern.Unacknowledged  // Faster, no wait
+  )
+```
+
+### Query Optimization
+
+```scala
+// Use projection to limit fields
+def findUserName(id: UserId): Future[Option[String]] =
+  collection
+    .find(
+      selector = BSONDocument("_id" -> id.value),
+      projection = Some(BSONDocument("username" -> 1))
+    )
+    .one[BSONDocument]
+    .map(_.flatMap(_.getAsOpt[String]("username")))
+```
+
+## Database Modules
+
+### DB Module
+
+The `db` module provides core database functionality:
+
+```scala
+// build.sbt
+lazy val db = module("db",
+  Seq(common),
+  Seq(hasher) ++ macwire.bundle
+)
+```
+
+Depended on by nearly all other modules for database access.
+
+### YOLO Mode
+
+"YOLO" mode in the config refers to fire-and-forget database operations:
+
+```hocon
+mongodb {
+  yolo {
+    uri = ${mongodb.uri}
+  }
+}
+```
+
+Used for non-critical writes where we don't need to wait for confirmation.
+
+## Elasticsearch Integration
+
+Games are indexed in Elasticsearch for search:
+
+```scala
+// project/Dependencies.scala
+val lilaSearch = "com.github.lichess-org.lila-search" %% "client" % "3.3.0"
+```
+
+### Search Module
+
+```scala
+lazy val search = module("search",
+  Seq(memo),
+  Seq(playWs.ahc, lilaSearch)
+)
+```
+
+Handles:
+- Game search
+- Study search
+- Forum search
+- Team search
+
+## Monitoring
+
+### MongoDB Logs
+
+```bash
+# View MongoDB logs
+sudo tail -f /var/log/mongodb/mongod.log
+
+# For Docker
+docker logs -f lila-mongodb
+```
+
+### Connection Status
+
+```javascript
+// MongoDB shell
+db.serverStatus().connections
+db.currentOp()
+```
+
+### Slow Query Log
+
+Enable profiling to find slow queries:
+
+```javascript
+// Enable profiling for queries > 100ms
+db.setProfilingLevel(1, { slowms: 100 })
+
+// View slow queries
+db.system.profile.find().sort({ ts: -1 }).limit(5)
+```
+
+## Troubleshooting
+
+### Connection Refused
+
+```bash
+# Check if MongoDB is running
+sudo systemctl status mongod
+
+# Start MongoDB
+sudo systemctl start mongod
+
+# Check port
+netstat -an | grep 27017
+```
+
+### Authentication Errors
+
+If you've enabled auth:
+
+```hocon
+mongodb {
+  uri = "mongodb://username:password@127.0.0.1:27017/lila?authSource=admin"
+}
+```
+
+### Timeout Issues
+
+Increase timeouts for slow operations:
+
+```hocon
+mongodb {
+  uri = "mongodb://127.0.0.1:27017/lila?connectTimeoutMS=10000&socketTimeoutMS=60000"
+}
+```
+
+## Production Differences
+
+In production, Lichess uses:
+
+- **Replica sets** for high availability
+- **Sharding** for horizontal scaling
+- **Separate read replicas** for analytics
+- **Automated backups** via mongodump
+- **Connection pooling** optimized for thousands of concurrent users
+
+## Next Steps
+
+- Learn about [Testing](/development/testing) with MongoDB
+- Review [Contributing Guidelines](/development/contributing)
+- Explore the [API Documentation](/api/overview)
+- See [Development Setup](/development/setup) for complete environment configuration

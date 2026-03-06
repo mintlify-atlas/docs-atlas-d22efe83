@@ -1,0 +1,250 @@
+---
+title: Local Development Setup
+description: Setting up your local development environment for Lila
+---
+
+## Prerequisites
+
+Before setting up your development environment, ensure you have the following installed:
+
+- **Java Development Kit (JDK) 21+**
+  - Not a JRE - you need the full JDK with compiler support
+  - Set `JAVA_HOME` environment variable
+- **sbt** (Scala Build Tool)
+- **MongoDB 4.0+**
+- **Redis** (for WebSocket support)
+- **Git**
+
+## Quick Start
+
+The fastest way to get Lila running locally:
+
+```bash
+git clone https://github.com/lichess-org/lila.git
+cd lila
+./lila.sh
+```
+
+Inside the sbt console:
+
+```
+run
+```
+
+The application will start on `http://localhost:9663`.
+
+## Initial Configuration
+
+### Configuration Files
+
+On first run, `lila.sh` automatically creates default configuration files if they don't exist:
+
+```bash
+# SBT options (memory settings)
+.sbtopts  # copied from .sbtopts.default
+
+# Application config
+conf/application.conf  # copied from conf/application.conf.default
+```
+
+### SBT Options
+
+The default `.sbtopts` file contains:
+
+```
+-J-Xms2g      # Initial heap size: 2GB
+-J-Xmx8g      # Maximum heap size: 8GB
+-J-Xss2m      # Thread stack size: 2MB
+-J-XX:+UseG1GC  # Use G1 garbage collector
+-J-XX:InitialCodeCacheSize=512m
+-J-XX:ReservedCodeCacheSize=512m
+```
+
+<Warning>
+  Do not use the `SBT_OPTS` environment variable. Always use the `.sbtopts` file instead.
+</Warning>
+
+### Application Configuration
+
+Key configuration values in `conf/application.conf`:
+
+```hocon
+# HTTP server
+http.port = 9663
+
+# MongoDB connection
+mongodb {
+  uri = "mongodb://127.0.0.1:27017?appName=lila"
+}
+
+# Network settings
+net {
+  domain = "localhost:9663"
+  socket.domains = ["localhost:9664"]  # WebSocket server
+  base_url = "http://localhost:9663"
+}
+```
+
+## Technology Stack
+
+Lila is built with:
+
+- **[Scala 3](https://www.scala-lang.org/)** - Primary language
+- **[Play Framework 2.8](https://www.playframework.com/)** - Web framework
+- **[scalatags](https://com-lihaoyi.github.io/scalatags/)** - HTML templating
+- **[scalachess](https://github.com/lichess-org/scalachess)** - Chess logic (submodule)
+- **[Akka Streams](https://akka.io)** - Reactive streams and async processing
+- **[ReactiveMongo](http://reactivemongo.org/)** - MongoDB driver (version 1.1.0-RC20)
+- **[MongoDB](https://www.mongodb.com)** - Database (4.7+ billion games stored)
+- **[Redis](https://redis.io/)** - Caching and WebSocket communication
+- **[Elasticsearch](https://www.elastic.co/)** - Game indexing and search
+- **[TypeScript](https://www.typescriptlang.org/)** + [snabbdom](https://github.com/snabbdom/snabbdom) - Client-side code
+- **[Sass](https://sass-lang.com/)** - CSS generation
+
+## Development Server
+
+### Starting the Server
+
+The `lila.sh` script is a thin wrapper around sbt that:
+
+1. Validates Java installation
+2. Creates default config files if missing
+3. Sets up proper Java environment variables
+4. Launches sbt with optimized settings
+
+```bash
+./lila.sh
+```
+
+### SBT Console Commands
+
+Once in the sbt console:
+
+```scala
+run              // Start the application
+compile          // Compile all sources
+test             // Run tests
+restart          // Restart the application
+~run             // Auto-reload on file changes
+```
+
+### Runtime Configuration
+
+When running locally, Lila uses:
+
+```bash
+# JVM options for development
+-Xms64m                           # Initial heap
+-Xmx512m                          # Max heap
+-Dlogger.file=conf/logger.dev.xml # Dev logging config
+```
+
+## Module Architecture
+
+Lila is organized into multiple independent modules with clear dependencies:
+
+```scala
+// Level 1 - Core
+core, coreI18n
+
+// Level 2 - UI & Common
+ui, common, tree
+
+// Level 3 - Infrastructure
+db, room, search
+
+// Level 4 - Base Services
+memo, rating
+
+// Level 5 - Domain Models
+game, gathering, study, user, puzzle, analyse
+report, pref, chat, playban, lobby, mailer, oauth
+
+// Level 6+ - Features
+tournament, round, swiss, relay, security, mod
+challenge, team, forum, simul, and more...
+```
+
+Each module is defined in `build.sbt` with explicit dependencies.
+
+## Disabling Features for Testing
+
+### Disable WebSockets
+
+In `conf/application.conf`:
+
+```hocon
+# Give empty list to disable websockets
+net.socket.domains = []
+```
+
+### Disable Rate Limiting
+
+```hocon
+# Uncomment to disable ratelimits during testing
+net.ratelimit = false
+```
+
+## External Services
+
+### Required Services
+
+- **MongoDB** - Database (default: `mongodb://127.0.0.1:27017`)
+- **Redis** - Required for WebSocket functionality via [lila-ws](https://github.com/lichess-org/lila-ws)
+
+### Optional Services
+
+- **lila-ws** - Separate WebSocket server (runs on port 9664)
+- **Elasticsearch** - Game search functionality
+- **Stockfish** - Computer analysis (via [fishnet](https://github.com/lichess-org/fishnet))
+
+## Browser Support
+
+| Browser           | Version | Support                |
+|-------------------|---------|------------------------|
+| Firefox           | 115+    | Full (recommended)     |
+| Chromium / Chrome | 112+    | Full                   |
+| Edge              | 109+    | Full                   |
+| Opera             | 91+     | Reasonable             |
+| Safari            | 13.1+   | Reasonable             |
+
+## Next Steps
+
+- Review the [Contributing Guidelines](/development/contributing)
+- Learn about [Testing](/development/testing)
+- Set up [MongoDB and Database](/development/database)
+- Join the [Lichess Discord](https://discord.gg/lichess)
+
+## Troubleshooting
+
+### Java Version Issues
+
+If you encounter Java-related errors:
+
+```bash
+# Check Java version
+java -version  # Should be 21+
+
+# Verify JAVA_HOME
+echo $JAVA_HOME
+
+# Ensure it's a JDK, not JRE
+java --list-modules | grep jdk.compiler
+```
+
+### Port Conflicts
+
+If port 9663 is already in use, modify `conf/application.conf`:
+
+```hocon
+http.port = 9999  # Use any available port
+```
+
+### Memory Issues
+
+Adjust memory settings in `.sbtopts` based on your system:
+
+```
+-J-Xms1g   # Reduce initial heap if needed
+-J-Xmx4g   # Reduce max heap for systems with less RAM
+```

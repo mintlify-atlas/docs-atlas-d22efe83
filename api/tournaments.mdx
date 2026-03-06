@@ -1,0 +1,696 @@
+---
+title: Tournaments API
+description: Endpoints for accessing tournament data, creating tournaments, and managing participation
+---
+
+## Get Current Tournaments
+
+Get all current tournaments.
+
+```bash
+GET /api/tournament
+```
+
+Returns tournaments currently running and scheduled to start soon.
+
+<ResponseExample>
+```json
+{
+  "created": [
+    {
+      "id": "abc123",
+      "createdBy": "lichess",
+      "system": "arena",
+      "minutes": 60,
+      "clock": {
+        "limit": 180,
+        "increment": 0
+      },
+      "rated": true,
+      "fullName": "Bullet Arena",
+      "nbPlayers": 0,
+      "variant": {
+        "key": "standard",
+        "short": "Std",
+        "name": "Standard"
+      },
+      "startsAt": 1658931600000,
+      "finishesAt": 1658935200000,
+      "status": 10,
+      "perf": {
+        "key": "bullet",
+        "name": "Bullet",
+        "position": 0,
+        "icon": "T"
+      }
+    }
+  ],
+  "started": [],
+  "finished": []
+}
+```
+</ResponseExample>
+
+## Get Tournament Info
+
+Get detailed information about a tournament.
+
+```bash
+GET /api/tournament/{id}
+```
+
+<ParamField path="id" type="string" required>
+  8-character tournament ID
+</ParamField>
+
+<ParamField query="page" type="integer" default="1">
+  Standings page number (max 200 for anonymous, 5000 for mobile OAuth)
+</ParamField>
+
+<ParamField query="chat" type="boolean" default="false">
+  Include chat messages
+</ParamField>
+
+<ParamField query="socketVersion" type="boolean" default="false">
+  Include socket version for real-time updates
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl https://lichess.org/api/tournament/abc123
+```
+
+```bash With Standings Page
+curl "https://lichess.org/api/tournament/abc123?page=2"
+```
+</CodeGroup>
+
+<ResponseExample>
+```json
+{
+  "id": "abc123",
+  "createdBy": "lichess",
+  "system": "arena",
+  "fullName": "Titled Arena",
+  "minutes": 120,
+  "clock": {
+    "limit": 180,
+    "increment": 2
+  },
+  "rated": true,
+  "nbPlayers": 1234,
+  "startsAt": 1658931600000,
+  "finishesAt": 1658938800000,
+  "status": 30,
+  "standing": {
+    "page": 1,
+    "players": [
+      {
+        "name": "player1",
+        "rank": 1,
+        "rating": 2800,
+        "score": 42,
+        "sheet": {
+          "scores": "3 3 2 3 3",
+          "total": 14,
+          "fire": true
+        }
+      }
+    ]
+  },
+  "pairings": [
+    {
+      "id": "game123",
+      "s": 30,
+      "u": ["player1", "player2"]
+    }
+  ],
+  "featured": {
+    "id": "game456",
+    "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR",
+    "orientation": "white",
+    "color": "white",
+    "lastMove": "e2e4",
+    "white": {
+      "rank": 1,
+      "name": "player1",
+      "rating": 2800
+    },
+    "black": {
+      "rank": 2,
+      "name": "player2",
+      "rating": 2750
+    }
+  }
+}
+```
+</ResponseExample>
+
+## Create Tournament
+
+Create a new arena tournament.
+
+```bash
+POST /api/tournament
+```
+
+Requires `tournament:write` OAuth scope.
+
+<ParamField body="name" type="string" required>
+  Tournament name (3-40 characters)
+</ParamField>
+
+<ParamField body="clockTime" type="number" required>
+  Clock initial time in minutes (0-180)
+</ParamField>
+
+<ParamField body="clockIncrement" type="integer" required>
+  Clock increment in seconds (0-180)
+</ParamField>
+
+<ParamField body="minutes" type="integer" required>
+  Tournament duration in minutes (20-720)
+</ParamField>
+
+<ParamField body="startDate" type="timestamp">
+  Tournament start date (defaults to now + 10 minutes)
+</ParamField>
+
+<ParamField body="variant" type="string" default="standard">
+  Chess variant
+</ParamField>
+
+<ParamField body="rated" type="boolean" default="true">
+  Whether games are rated
+</ParamField>
+
+<ParamField body="position" type="string">
+  Custom starting position in FEN
+</ParamField>
+
+<ParamField body="berserkable" type="boolean" default="true">
+  Allow berserk
+</ParamField>
+
+<ParamField body="streakable" type="boolean" default="true">
+  Allow arena streaks
+</ParamField>
+
+<ParamField body="hasChat" type="boolean" default="true">
+  Enable tournament chat
+</ParamField>
+
+<ParamField body="description" type="string">
+  Tournament description
+</ParamField>
+
+<ParamField body="password" type="string">
+  Password for private tournament
+</ParamField>
+
+<ParamField body="teamId" type="string">
+  Restrict to team members
+</ParamField>
+
+<ParamField body="minRating" type="integer">
+  Minimum rating requirement
+</ParamField>
+
+<ParamField body="maxRating" type="integer">
+  Maximum rating requirement
+</ParamField>
+
+<ParamField body="nbRatedGame" type="integer">
+  Minimum number of rated games required
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://lichess.org/api/tournament \
+  -H "Authorization: Bearer {token}" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "name=My Arena" \
+  -d "clockTime=3" \
+  -d "clockIncrement=2" \
+  -d "minutes=45" \
+  -d "rated=true"
+```
+
+```bash Team Battle
+curl -X POST https://lichess.org/api/tournament \
+  -H "Authorization: Bearer {token}" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "name=Team Battle" \
+  -d "clockTime=5" \
+  -d "clockIncrement=3" \
+  -d "minutes=120" \
+  -d "teamBattleByTeam=team1,team2,team3"
+```
+</CodeGroup>
+
+<ResponseExample>
+```json
+{
+  "id": "newtourn1",
+  "fullName": "My Arena",
+  "url": "https://lichess.org/tournament/newtourn1"
+}
+```
+</ResponseExample>
+
+## Update Tournament
+
+Update tournament settings (only before it starts).
+
+```bash
+POST /api/tournament/{id}
+```
+
+<ParamField path="id" type="string" required>
+  Tournament ID
+</ParamField>
+
+Accepts same parameters as create tournament.
+
+## Join Tournament
+
+Join an arena tournament.
+
+```bash
+POST /api/tournament/{id}/join
+```
+
+<ParamField path="id" type="string" required>
+  Tournament ID
+</ParamField>
+
+<ParamField body="password" type="string">
+  Password for private tournament
+</ParamField>
+
+<ParamField body="team" type="string">
+  Team ID for team battle
+</ParamField>
+
+<ParamField body="pairMeAsap" type="boolean" default="false">
+  Request immediate pairing when joining
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://lichess.org/api/tournament/abc123/join \
+  -H "Authorization: Bearer {token}"
+```
+</CodeGroup>
+
+## Withdraw from Tournament
+
+Withdraw from an arena tournament.
+
+```bash
+POST /api/tournament/{id}/withdraw
+```
+
+<ParamField path="id" type="string" required>
+  Tournament ID
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://lichess.org/api/tournament/abc123/withdraw \
+  -H "Authorization: Bearer {token}"
+```
+</CodeGroup>
+
+## Terminate Tournament
+
+Terminate a tournament (creator or moderator only).
+
+```bash
+POST /api/tournament/{id}/terminate
+```
+
+<ParamField path="id" type="string" required>
+  Tournament ID
+</ParamField>
+
+## Export Tournament Games
+
+Download all games from a tournament.
+
+```bash
+GET /api/tournament/{id}/games
+```
+
+<ParamField path="id" type="string" required>
+  Tournament ID
+</ParamField>
+
+<ParamField query="player" type="string">
+  Filter by username
+</ParamField>
+
+<ParamField query="moves" type="boolean" default="true">
+  Include moves
+</ParamField>
+
+<ParamField query="pgnInJson" type="boolean" default="false">
+  Include PGN in JSON responses
+</ParamField>
+
+<ParamField query="tags" type="boolean" default="true">
+  Include PGN tags
+</ParamField>
+
+<ParamField query="clocks" type="boolean" default="false">
+  Include clock times
+</ParamField>
+
+<ParamField query="evals" type="boolean" default="false">
+  Include analysis evaluations
+</ParamField>
+
+<ParamField query="opening" type="boolean" default="false">
+  Include opening information
+</ParamField>
+
+<CodeGroup>
+```bash PGN Format
+curl "https://lichess.org/api/tournament/abc123/games" \
+  -H "Accept: application/x-chess-pgn"
+```
+
+```bash NDJSON Format
+curl "https://lichess.org/api/tournament/abc123/games?player=username"
+```
+</CodeGroup>
+
+Returns games in streaming PGN or NDJSON format.
+
+## Export Tournament Results
+
+Export tournament results and standings.
+
+```bash
+GET /api/tournament/{id}/results
+```
+
+<ParamField path="id" type="string" required>
+  Tournament ID
+</ParamField>
+
+<ParamField query="nb" type="integer">
+  Maximum number of players to fetch
+</ParamField>
+
+<ParamField query="sheet" type="boolean" default="false">
+  Include score sheet for each player (slower)
+</ParamField>
+
+<ParamField query="as" type="string">
+  Format: `json` or `csv`
+</ParamField>
+
+<CodeGroup>
+```bash NDJSON (default)
+curl https://lichess.org/api/tournament/abc123/results
+```
+
+```bash CSV Format
+curl "https://lichess.org/api/tournament/abc123/results?as=csv"
+```
+
+```bash With Score Sheets
+curl "https://lichess.org/api/tournament/abc123/results?sheet=true"
+```
+</CodeGroup>
+
+<ResponseExample>
+```json NDJSON Line
+{
+  "rank": 1,
+  "score": 42,
+  "rating": 2800,
+  "username": "player1",
+  "title": "GM",
+  "performance": 2850,
+  "team": "team-id",
+  "sheet": {
+    "scores": "3 2 3 3 2 3",
+    "total": 16,
+    "fire": true
+  }
+}
+```
+</ResponseExample>
+
+## Get Tournament Teams
+
+Get team standings for team battle tournaments.
+
+```bash
+GET /api/tournament/{id}/teams
+```
+
+<ParamField path="id" type="string" required>
+  Tournament ID
+</ParamField>
+
+<ResponseExample>
+```json
+{
+  "teams": [
+    {
+      "id": "team1",
+      "name": "Team One",
+      "score": 156,
+      "players": [
+        {
+          "user": {
+            "name": "player1",
+            "id": "player1"
+          },
+          "score": 42
+        }
+      ]
+    }
+  ]
+}
+```
+</ResponseExample>
+
+## Get Team Arena Tournaments
+
+Get arena tournaments for a team.
+
+```bash
+GET /api/team/{teamId}/arena
+```
+
+<ParamField path="teamId" type="string" required>
+  Team ID
+</ParamField>
+
+<ParamField query="max" type="integer" default="100">
+  Maximum number of tournaments to return
+</ParamField>
+
+## Update Team Battle
+
+Update team battle settings.
+
+```bash
+POST /api/tournament/team-battle/{id}
+```
+
+<ParamField path="id" type="string" required>
+  Tournament ID
+</ParamField>
+
+<ParamField body="teams" type="string" required>
+  Comma-separated list of team IDs
+</ParamField>
+
+<ParamField body="nbLeaders" type="integer" required>
+  Number of leaders per team (1-20)
+</ParamField>
+
+## Tournaments Created by User
+
+Get tournaments created by a user.
+
+```bash
+GET /api/user/{username}/tournament/created
+```
+
+<ParamField path="username" type="string" required>
+  Username
+</ParamField>
+
+<ParamField query="status" type="array">
+  Filter by status: 10 (created), 20 (started), 30 (finished)
+</ParamField>
+
+## Tournaments Played by User
+
+Get tournaments a user has played in.
+
+```bash
+GET /api/user/{username}/tournament/played
+```
+
+<ParamField path="username" type="string" required>
+  Username
+</ParamField>
+
+<ResponseExample>
+```json
+{
+  "currentPage": 1,
+  "maxPerPage": 20,
+  "currentPageResults": [
+    {
+      "id": "abc123",
+      "fullName": "Bullet Arena",
+      "startsAt": 1658931600000,
+      "finishesAt": 1658935200000,
+      "nbPlayers": 234,
+      "perf": {
+        "key": "bullet",
+        "name": "Bullet"
+      },
+      "rank": 15,
+      "score": 35,
+      "nbGames": 12,
+      "performance": 1850
+    }
+  ],
+  "previousPage": null,
+  "nextPage": 2,
+  "nbResults": 156,
+  "nbPages": 8
+}
+```
+</ResponseExample>
+
+## Swiss Tournaments
+
+### Create Swiss Tournament
+
+```bash
+POST /api/swiss/new/{teamId}
+```
+
+<ParamField path="teamId" type="string" required>
+  Team ID (Swiss tournaments require a team)
+</ParamField>
+
+Accepts similar parameters to arena tournaments plus:
+
+<ParamField body="nbRounds" type="integer" required>
+  Number of rounds (3-100)
+</ParamField>
+
+<ParamField body="roundInterval" type="integer">
+  Seconds between rounds (5-99999, or 99999999 for manual)
+</ParamField>
+
+### Get Swiss Tournament
+
+```bash
+GET /api/swiss/{id}
+```
+
+### Join Swiss Tournament
+
+```bash
+POST /api/swiss/{id}/join
+```
+
+### Withdraw from Swiss
+
+```bash
+POST /api/swiss/{id}/withdraw
+```
+
+### Export Swiss Games
+
+```bash
+GET /api/swiss/{id}/games
+```
+
+### Export Swiss Results
+
+```bash
+GET /api/swiss/{id}/results
+```
+
+### Manually Schedule Next Round
+
+```bash
+POST /api/swiss/{id}/schedule-next-round
+```
+
+<ParamField body="date" type="timestamp">
+  When to start the next round (default: now)
+</ParamField>
+
+### Get Team Swiss Tournaments
+
+```bash
+GET /api/team/{teamId}/swiss
+```
+
+## Response Fields
+
+<ResponseField name="id" type="string">
+  8-character tournament ID
+</ResponseField>
+
+<ResponseField name="createdBy" type="string">
+  Username of tournament creator
+</ResponseField>
+
+<ResponseField name="system" type="string">
+  Tournament system: `arena` or `swiss`
+</ResponseField>
+
+<ResponseField name="minutes" type="integer">
+  Duration in minutes
+</ResponseField>
+
+<ResponseField name="clock" type="object">
+  Clock settings with `limit` (seconds) and `increment` (seconds)
+</ResponseField>
+
+<ResponseField name="rated" type="boolean">
+  Whether games are rated
+</ResponseField>
+
+<ResponseField name="fullName" type="string">
+  Tournament full name
+</ResponseField>
+
+<ResponseField name="nbPlayers" type="integer">
+  Number of players joined
+</ResponseField>
+
+<ResponseField name="variant" type="object">
+  Chess variant information
+</ResponseField>
+
+<ResponseField name="startsAt" type="timestamp">
+  Start time in milliseconds
+</ResponseField>
+
+<ResponseField name="finishesAt" type="timestamp">
+  Scheduled end time
+</ResponseField>
+
+<ResponseField name="status" type="integer">
+  Status code: 10 (created), 20 (started), 30 (finished)
+</ResponseField>
+
+<ResponseField name="perf" type="object">
+  Performance type information
+</ResponseField>

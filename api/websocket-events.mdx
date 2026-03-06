@@ -1,0 +1,638 @@
+---
+title: WebSocket Events
+description: Event types and message formats in Lichess WebSocket communication
+---
+
+## Message Structure
+
+All WebSocket messages follow a consistent JSON structure:
+
+```typescript
+interface Message {
+  t: string;      // Message type (event name)
+  d?: any;        // Data payload (optional)
+  v?: number;     // Version number (optional, for versioned sockets)
+}
+```
+
+## Client → Server Events
+
+### Connection and Heartbeat
+
+#### Ping
+
+Keeps connection alive and measures latency.
+
+```json
+// Authenticated ping with lag
+{
+  "t": "p",
+  "l": 5  // Average lag in deciseconds
+}
+
+// Simple ping
+null
+```
+
+**Frequency:** Every 2.5 seconds
+
+**Response:** Pong message (`0` or `{"t":"n"}`)
+
+### Game Events
+
+#### Move
+
+Submits a chess move in a live game.
+
+```json
+{
+  "t": "move",
+  "d": {
+    "u": "e2e4",     // UCI move notation
+    "a": 123,        // Ack ID (if ackable)
+    "l": 42,         // Client lag (if withLag)
+    "s": "1a"        // Milliseconds encoded (if provided)
+  }
+}
+```
+
+**Options:**
+- `ackable: true` - Requires server acknowledgment
+- `withLag: true` - Include client lag in payload
+- `sign: <signature>` - Required signature for validation
+
+Location: `/home/daytona/workspace/source/ui/lib/src/socket.ts:183`
+
+#### More Time
+
+Requests additional time (in games that support it).
+
+```json
+{
+  "t": "moretime"
+}
+```
+
+Throttled to once per 300ms.
+
+#### Flag
+
+Claims timeout victory when opponent's clock expires.
+
+```json
+{
+  "t": "flag",
+  "d": "white"  // Color that ran out of time
+}
+```
+
+Uses exponential backoff (500ms * 1.1^n) to avoid spam.
+
+#### Berserk
+
+Activates berserk mode in arena tournaments.
+
+```json
+{
+  "t": "berserk",
+  "d": {
+    "a": 124  // Ack ID
+  }
+}
+```
+
+Throttled to once per 200ms, requires acknowledgment.
+
+Location: `/home/daytona/workspace/source/ui/round/src/socket.ts:168`
+
+### Room Events
+
+#### Chat Message
+
+Sends a chat message to a room.
+
+```json
+{
+  "t": "talk",
+  "d": "Hello, everyone!"
+}
+```
+
+#### Keep Alive
+
+Maintains room connection.
+
+```scala
+// Server receives: "room/alives <roomId1>,<roomId2>,<roomId3>"
+```
+
+Location: `/home/daytona/workspace/source/modules/room/src/main/RoomSocket.scala:81`
+
+## Server → Client Events
+
+### Connection Events
+
+#### Pong
+
+Response to ping, confirms connection is alive.
+
+```
+0  // Simple pong (single character)
+```
+
+Or:
+
+```json
+{
+  "t": "n"  // Named pong
+}
+```
+
+#### Resync
+
+Instructs client to reload the page due to synchronization issues.
+
+```json
+{
+  "t": "resync"
+}
+```
+
+Client reloads after 500ms delay.
+
+Location: `/home/daytona/workspace/source/ui/lib/src/socket.ts:294`
+
+#### Acknowledgment
+
+Confirms receipt of an ackable message.
+
+```json
+{
+  "t": "ack",
+  "d": 123  // Ack ID being confirmed
+}
+```
+
+Client removes message from resend queue upon receiving ack.
+
+#### Batch
+
+Multiple events sent together.
+
+```json
+{
+  "t": "batch",
+  "d": [
+    { "t": "event1", "d": "data1" },
+    { "t": "event2", "d": "data2" }
+  ]
+}
+```
+
+Each sub-event processed individually.
+
+### Game Events
+
+#### Move
+
+Notifies that a move was made.
+
+```json
+{
+  "t": "move",
+  "v": 42,
+  "d": {
+    "uci": "e2e4",
+    "san": "e4",
+    "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1",
+    "clock": {
+      "white": 600,
+      "black": 598
+    }
+  }
+}
+```
+
+Location: `/home/daytona/workspace/source/ui/round/src/socket.ts:79`
+
+#### Clock Increment
+
+Adds time to a player's clock.
+
+```json
+{
+  "t": "clockInc",
+  "d": {
+    "color": "white",
+    "time": 10  // Seconds added
+  }
+}
+```
+
+#### Crowd
+
+Updates player presence status.
+
+```json
+{
+  "t": "crowd",
+  "d": {
+    "white": true,   // White player online
+    "black": false   // Black player offline
+  }
+}
+```
+
+Location: `/home/daytona/workspace/source/ui/round/src/socket.ts:97`
+
+#### End Data
+
+Game has ended with final result.
+
+```json
+{
+  "t": "endData",
+  "d": {
+    "winner": "white",
+    "status": "mate",
+    "ratingDiff": {
+      "white": 12,
+      "black": -11
+    }
+  }
+}
+```
+
+### Offer Events
+
+#### Draw Offer
+
+Player offers or accepts a draw.
+
+```json
+{
+  "t": "drawOffer",
+  "d": "white"  // Color offering draw
+}
+```
+
+Location: `/home/daytona/workspace/source/ui/round/src/socket.ts:115`
+
+#### Takeback Offers
+
+Players proposing takebacks.
+
+```json
+{
+  "t": "takebackOffers",
+  "d": {
+    "white": true,   // White is proposing
+    "black": false
+  }
+}
+```
+
+Location: `/home/daytona/workspace/source/ui/round/src/socket.ts:73`
+
+#### Rematch Offer
+
+Player offers rematch after game.
+
+```json
+{
+  "t": "rematchOffer",
+  "d": "white"  // Color offering rematch
+}
+```
+
+#### Rematch Taken
+
+Rematch accepted, new game created.
+
+```json
+{
+  "t": "rematchTaken",
+  "d": "abc12345"  // New game ID
+}
+```
+
+### Room Events
+
+#### Message
+
+Chat message in a room.
+
+```json
+{
+  "t": "message",
+  "v": 15,
+  "d": {
+    "u": "username",
+    "t": "Hello!",
+    "r": false  // Not a troll message
+  }
+}
+```
+
+Location: `/home/daytona/workspace/source/modules/room/src/main/RoomSocket.scala:93`
+
+#### Chat Timeout
+
+User has been muted in chat.
+
+```json
+{
+  "t": "chat_timeout",
+  "v": 16,
+  "d": "username"
+}
+```
+
+#### Chat Reinstate
+
+User's chat privileges restored.
+
+```json
+{
+  "t": "chat_reinstate",
+  "v": 17,
+  "d": "username"
+}
+```
+
+### User Events
+
+#### Redirect
+
+Instructs client to navigate to a different page.
+
+```json
+{
+  "t": "redirect",
+  "d": "/tournament/abc123"
+}
+```
+
+Location: `/home/daytona/workspace/source/ui/round/src/socket.ts:82`
+
+#### Announce
+
+Site-wide announcement.
+
+```json
+{
+  "t": "announce",
+  "d": {
+    "msg": "Server maintenance in 10 minutes",
+    "date": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+Location: `/home/daytona/workspace/source/modules/socket/src/main/RemoteSocket.scala:76`
+
+## Server-to-Server Protocol
+
+Messages between Lila and lila-ws use a text-based protocol over Redis.
+
+### Incoming (lila-ws → Lila)
+
+Location: `/home/daytona/workspace/source/modules/socket/src/main/RemoteSocket.scala:211`
+
+#### Connect User
+
+```
+connect/user <userId>
+```
+
+Example: `connect/user bob`
+
+#### Connect Users (Batch)
+
+```
+connect/users <userId1>,<userId2>,<userId3>
+```
+
+Example: `connect/users alice,bob,charlie`
+
+#### Disconnect Users
+
+```
+disconnect/users <userId1>,<userId2>
+```
+
+#### Lag Report
+
+```
+lags <user1>:<lag1>,<user2>:<lag2>
+```
+
+Example: `lags alice:50,bob:120` (lag in centiseconds)
+
+Location: `/home/daytona/workspace/source/modules/socket/src/main/RemoteSocket.scala:227`
+
+#### Tell User
+
+```
+tell/user <userId> <jsonPayload>
+```
+
+Example: `tell/user alice {"t":"msgRead","d":{}}`
+
+#### Chat Say
+
+```
+chat/say <roomId> <userId> <message>
+```
+
+Location: `/home/daytona/workspace/source/modules/room/src/main/RoomSocket.scala:113`
+
+#### Keep Alives
+
+```
+room/alives <roomId1>,<roomId2>,<roomId3>
+```
+
+Location: `/home/daytona/workspace/source/modules/room/src/main/RoomSocket.scala:112`
+
+### Outgoing (Lila → lila-ws)
+
+Location: `/home/daytona/workspace/source/modules/socket/src/main/RemoteSocket.scala:251`
+
+#### Tell User
+
+```
+tell/users <userId> <jsonPayload>
+```
+
+Example: `tell/users alice {"t":"following_onlines","d":["bob","charlie"]}`
+
+#### Tell Users (Multiple)
+
+```
+tell/users <userId1>,<userId2> <jsonPayload>
+```
+
+#### Tell All
+
+```
+tell/all <jsonPayload>
+```
+
+Example: `tell/all {"t":"announce","d":{"msg":"System message"}}`
+
+#### Tell Room
+
+```
+tell/room <roomId> <jsonPayload>
+```
+
+Location: `/home/daytona/workspace/source/modules/room/src/main/RoomSocket.scala:137`
+
+#### Tell Room with Version
+
+```
+tell/room/version <roomId> <version> <isTroll> <jsonPayload>
+```
+
+Example: `tell/room/version abc123 42 - {"t":"message","d":{}}`
+
+Location: `/home/daytona/workspace/source/modules/room/src/main/RoomSocket.scala:139`
+
+#### Disconnect User
+
+```
+disconnect/user <userId>
+```
+
+Location: `/home/daytona/workspace/source/modules/socket/src/main/RemoteSocket.scala:263`
+
+#### Follow/Unfollow
+
+```
+rel/follow <userId1> <userId2>
+rel/unfollow <userId1> <userId2>
+```
+
+Location: `/home/daytona/workspace/source/modules/socket/src/main/RemoteSocket.scala:269`
+
+## Message Helpers
+
+### Creating Messages
+
+Scala helper for creating JSON messages:
+
+```scala
+def makeMessage[A](t: String, data: A)(using writes: Writes[A]): JsObject =
+  JsObject(Map("t" -> JsString(t), "d" -> writes.writes(data)))
+```
+
+Location: `/home/daytona/workspace/source/modules/core/src/main/socket.scala:76`
+
+TypeScript equivalent:
+
+```typescript
+const msg = { t: "move", d: moveData };
+```
+
+### Ackable Messages
+
+Messages requiring acknowledgment include an ack ID:
+
+```typescript
+// Client adds 'a' field
+{
+  "t": "move",
+  "d": {
+    "u": "e2e4",
+    "a": 123  // Ack ID
+  }
+}
+
+// Server responds
+{
+  "t": "ack",
+  "d": 123
+}
+```
+
+Location: `/home/daytona/workspace/source/ui/lib/src/socket.ts:386`
+
+**Resend behavior:**
+- Client resends every 1.2 seconds if not acknowledged
+- Messages older than 2.5 seconds are resent
+- Removed from queue upon receiving ack
+
+## Version Handling
+
+Versioned sockets ensure event ordering:
+
+```typescript
+if (message.v && message.v > currentVersion + 1) {
+  // Missed events, retry or reload
+  setTimeout(() => handleWithRetry(message), 200);
+}
+```
+
+Location: `/home/daytona/workspace/source/ui/lib/src/socket.ts:272`
+
+After 10 retries, client reloads the page to resynchronize.
+
+## Special Event Types
+
+### Simul Events
+
+For simultaneous exhibitions:
+
+```json
+// Player moved in another game
+{
+  "t": "simulPlayerMove",
+  "d": "gameId123"
+}
+
+// Simul ended
+{
+  "t": "simulEnd",
+  "d": {
+    "id": "simul123",
+    "name": "GM Simul"
+  }
+}
+```
+
+Location: `/home/daytona/workspace/source/ui/round/src/socket.ts:138`
+
+### Study Events
+
+Collaborative analysis boards have additional events for synchronized editing, shapes, comments, and member presence.
+
+### Tournament Events
+
+Tournament lobbies receive standings updates, pairings, and tournament lifecycle events.
+
+## Error Handling
+
+### Connection Errors
+
+On WebSocket error or close:
+1. Client marks as offline
+2. Schedules reconnection (3.5s default)
+3. Rotates to next socket domain if needed
+4. Resends pending ackable messages after reconnection
+
+Location: `/home/daytona/workspace/source/ui/lib/src/socket.ts:336`
+
+### Version Gaps
+
+If client detects missed events (version gap):
+1. Retry handling message up to 10 times with 200ms delay
+2. If still gapped after retries, reload page to resync
+
+Location: `/home/daytona/workspace/source/ui/lib/src/socket.ts:278`
+
+## Related Resources
+
+- [WebSocket Overview](/api/websocket-overview) - Architecture and connection setup
+- [lila-ws repository](https://github.com/lichess-org/lila-ws) - WebSocket server source code
+- HTTP API documentation for REST endpoints

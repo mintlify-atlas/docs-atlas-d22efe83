@@ -1,0 +1,315 @@
+---
+title: Game Module
+description: Core chess game state, logic, and persistence for Lichess
+---
+
+The **game** module is one of the most fundamental modules in Lichess. It manages chess game state, move validation, game lifecycle, and persistence.
+
+## Core Types
+
+### Game
+
+The `Game` type represents a complete chess game with all its state:
+
+```scala
+// Defined in lila.core.game
+case class Game(
+    id: GameId,
+    players: ByColor[Player],
+    chess: ChessGame,                // Current board position
+    status: Status,                  // Created, Started, Finished, etc.
+    daysPerTurn: Option[Days],
+    binaryMoveTimes: Option[ByteArray],
+    mode: Mode,                      // Casual or Rated
+    createdAt: Instant,
+    movedAt: Instant
+)
+```
+
+### Player
+
+```scala
+case class Player(
+    id: GamePlayerId,
+    color: Color,                    // White or Black
+    aiLevel: Option[Int],
+    isWinner: Option[Boolean],
+    isOfferingDraw: Boolean = false,
+    proposeTakebackAt: Option[Ply] = None,
+    rating: Option[IntRating],
+    ratingDiff: Option[IntRatingDiff],
+    berserk: Boolean = false
+)
+```
+
+## Key Files
+
+### Game.scala
+Core game domain model and extensions:
+
+```scala
+// From modules/game/src/main/Game.scala
+object GameExt:
+  
+  def analysable(g: Game) =
+    g.replayable && g.playedPlies > 4 &&
+      Game.analysableVariants(g.variant) &&
+      !Game.isOldHorde(g)
+
+  extension (g: Game)
+    def withClock(c: Clock) = Progress(g, g.copy(chess = g.chess.copy(clock = Some(c))))
+
+    def startClock: Option[Progress] =
+      g.clock.map: c =>
+        g.start.withClock(c.start)
+
+    def playerCanOfferDraw(color: Color) =
+      g.started && g.playable &&
+        g.ply >= 2 &&
+        !g.player(color).isOfferingDraw &&
+        !g.opponent(color).isAi &&
+        !g.playerHasOfferedDrawRecently(color) &&
+        !g.swissPreventsDraw &&
+        !g.rulePreventsDraw
+
+    def goBerserk(color: Color): Option[Progress] =
+      g.clock
+        .ifTrue(g.berserkable && !g.player(color).berserk)
+        .map: c =>
+          val newClock = c.goBerserk(color)
+          Progress(
+            g,
+            g.copy(
+              chess = g.chess.copy(clock = Some(newClock)),
+              loadClockHistory = _ =>
+                g.clockHistory.map: history =>
+                  if history(color).isEmpty then history
+                  else history.resetClockHistory(color).recordNewClock(color, newClock)
+            ).updatePlayer(color, _.copy(berserk = true))
+          )
+```
+
+### GameRepo.scala
+Database access layer for games:
+
+```scala
+// From modules/game/src/main/GameRepo.scala:18
+final class GameRepo(c: Coll)(using Executor) extends lila.core.game.GameRepo(c):
+
+  def game(gameId: GameId): Fu[Option[Game]] = coll.byId[Game](gameId)
+  
+  def gameFromSecondary(gameId: GameId): Fu[Option[Game]] = 
+    coll.secondary.byId[Game](gameId)
+
+  def gamesFromSecondary(gameIds: Seq[GameId]): Fu[List[Game]] = 
+    gameIds.nonEmpty.so:
+      coll.byOrderedIds[Game, GameId](gameIds, readPref = _.sec)(_.id)
+
+  def finished(gameId: GameId): Fu[Option[Game]] =
+    coll.one[Game]($id(gameId) ++ Query.finished)
+
+  def player(gameId: GameId, color: Color): Fu[Option[Player]] =
+    game(gameId).dmap2 { _.player(color) }
+
+  def pov(gameId: GameId, color: Color): Fu[Option[Pov]] =
+    game(gameId).dmap2 { Pov(_, color) }
+```
+
+## Key Components
+
+### 1. Game Lifecycle
+
+```scala
+// Game status progression
+Created -> Started -> 
+  (Mate | Stalemate | Draw | Resign | Timeout | Aborted)
+```
+
+Key lifecycle operations:
+- `game.start` - Start a created game
+- `game.finish(status)` - Complete a game
+- `game.abort` - Abort an unstarted game
+
+### 2. Move Time Tracking
+
+The module tracks move times for analysis:
+
+```scala
+def computeMoveTimes(g: Game, color: Color): Option[List[Centis]] = {
+  for
+    clk <- g.clock
+    inc = clk.incrementOf(color)
+    history <- g.clockHistory
+    clocks = history(color)
+  yield Centis(0) :: {
+    val pairs = clocks.iterator.zip(clocks.iterator.drop(1))
+    val clocksRecorded = history.mapReduce(_.size)(_ + _)
+    val noLastInc = g.finished && (g.playedPlies >= clocksRecorded) == (color != g.turnColor)
+
+    pairs
+      .map: (first, second) =>
+        {
+          val d = first - second
+          if pairs.hasNext || !noLastInc then d + inc else d
+        }.nonNeg
+      .toList
+  }
+}
+```
+
+### 3. Binary Format
+
+Games are stored efficiently using binary encoding:
+
+```scala
+// BinaryFormat.scala compresses game data
+object BinaryFormat:
+  object moveTime:
+    def read(ba: ByteArray, plies: Ply): Vector[Centis] = ???
+    def write(times: Vector[Centis]): ByteArray = ???
+  
+  object clockHistory:
+    def read(ba: ByteArray, color: Color): Vector[Centis] = ???
+    def write(history: ClockHistory): ByteArray = ???
+```
+
+### 4. Crosstable
+
+Tracks head-to-head records between players:
+
+```scala
+// Crosstable.scala
+case class Crosstable(
+    user1: UserId,
+    user2: UserId,
+    results: List[Result],
+    nbGames: Int
+)
+
+case class Result(
+    gameId: GameId,
+    winnerId: Option[UserId],
+    timestamp: Instant
+)
+```
+
+## Important APIs
+
+### Creating Games
+
+```scala
+// From setup module, which depends on game
+val game = Game.make(
+  chess = ChessGame(
+    situation = Situation(Board.init(variant), White),
+    clock = clock.map(_.toClock)
+  ),
+  players = ByColor(
+    white = Player.make(White, whitePlayer),
+    black = Player.make(Black, blackPlayer)
+  ),
+  mode = mode,
+  source = Source.Lobby,
+  pgnImport = None
+)
+
+gameRepo.insertDenormalized(game)
+```
+
+### Querying Games
+
+```scala
+// Recent games by user
+gameRepo.recentPovsByUserFromSecondary(userId, nb = 10)
+
+// Games by IDs (maintaining order)
+gameRepo.gamesFromSecondary(gameIds)
+
+// Finished games only
+gameRepo.finished(gameId)
+
+// With specific status
+gameRepo.coll.find(Query.finished ++ Query.rated).cursor[Game]()
+```
+
+### Game Events
+
+```scala
+// Event.scala defines game events
+sealed trait Event
+object Event:
+  case class Move(move: String, ply: Ply, fen: String) extends Event
+  case class Drop(role: String, pos: String, ply: Ply, fen: String) extends Event
+  case class Clock(white: Float, black: Float) extends Event
+  case class State(color: Color, ply: Ply) extends Event
+  case class End(winner: Option[Color]) extends Event
+  case class Reload extends Event
+```
+
+## Module Dependencies
+
+### Dependencies
+- **chess** - Chess logic (external library)
+- **db** - Database layer
+- **common** - Shared utilities
+- **core** - Core types
+- **user** - User references
+- **rating** - Rating calculations
+
+### Dependents
+- **round** - Live game play
+- **analyse** - Game analysis
+- **tournament** - Tournament games
+- **puzzle** - Puzzle generation from games
+- **tv** - Featured games
+
+## Binary Handlers
+
+The module uses BSON for MongoDB serialization:
+
+```scala
+// BSONHandlers.scala
+import reactivemongo.api.bson.*
+
+given statusHandler: BSONHandler[Status] = ???
+given clockHandler: BSONHandler[Clock] = ???
+given playerHandler: BSONDocumentHandler[Player] = ???
+given gameHandler: BSONDocumentHandler[Game] = ???
+```
+
+## Performance Optimizations
+
+1. **Secondary reads** - Use MongoDB secondary for queries that don't need latest data
+2. **Projections** - Load only needed fields (e.g., `LightGame`)
+3. **Binary encoding** - Compress move times and clock history
+4. **Denormalization** - Store player data with game to avoid joins
+5. **Indexing** - Strategic indexes on common query patterns
+
+## Testing
+
+The module includes comprehensive tests:
+
+```scala
+// From test/GameTest.scala
+class GameTest extends ScalaCheckSuite:
+  test("game start"):
+    val game = makeGame
+    assert(game.playable)
+    assert(!game.finished)
+  
+  test("game finish"):
+    val game = makeGame.finish(Status.Mate)
+    assert(game.finished)
+    assert(!game.playable)
+```
+
+## Related Modules
+
+<CardGroup cols={2}>
+  <Card title="Round Module" icon="arrows-rotate" href="/modules/round">
+    Manages live game rounds and real-time play
+  </Card>
+  <Card title="Analyse Module" icon="magnifying-glass" href="/modules/analyse">
+    Post-game analysis and computer evaluation
+  </Card>
+</CardGroup>

@@ -1,0 +1,263 @@
+---
+title: Backend Modules Overview
+description: Understanding Lichess's modular architecture with 83+ Scala modules
+---
+
+Lichess backend is built with a highly modular architecture consisting of **83+ independent modules**, each focused on a specific domain or functionality. This modular design enables:
+
+- **Separation of concerns** - Each module handles a specific aspect of the platform
+- **Independent development** - Teams can work on different modules simultaneously
+- **Code reusability** - Modules can depend on and use other modules
+- **Maintainability** - Clear boundaries make the codebase easier to understand and maintain
+
+## Module Structure
+
+Each module follows a consistent directory structure:
+
+```
+modules/<module-name>/
+├── src/
+│   ├── main/
+│   │   ├── *.scala          # Main implementation files
+│   │   ├── Env.scala         # Module environment/configuration
+│   │   ├── package.scala     # Package-level definitions
+│   │   └── ui/               # UI components (if applicable)
+│   └── test/
+│       └── *Test.scala       # Unit tests
+└── build.sbt                 # Module dependencies
+```
+
+## Core Module Categories
+
+### Game & Chess Logic
+- **game** - Core chess game state and logic
+- **round** - Live game rounds and player interactions
+- **setup** - Game creation and configuration
+- **analyse** - Post-game analysis
+- **tree** - Move tree data structures
+
+### Competitive Play
+- **tournament** - Tournament system
+- **swiss** - Swiss-style tournaments
+- **simul** - Simultaneous exhibitions
+- **puzzle** - Tactical puzzles
+- **arena** - Arena tournaments
+
+### User & Social
+- **user** - User accounts and profiles
+- **relation** - User relationships (follows, blocks)
+- **msg** - Direct messaging
+- **chat** - Real-time chat
+- **forum** - Discussion forums
+- **team** - Team functionality
+
+### Learning & Content
+- **study** - Collaborative chess studies
+- **practice** - Practice scenarios
+- **learn** - Interactive lessons
+- **coach** - Coach profiles and content
+- **video** - Video content
+
+### Infrastructure
+- **db** - Database abstractions
+- **memo** - Caching layer
+- **socket** - WebSocket connections
+- **common** - Shared utilities
+- **core** - Core types and interfaces
+- **i18n** - Internationalization
+
+### Security & Moderation
+- **security** - Authentication and security
+- **mod** - Moderation tools
+- **report** - User reports
+- **shutup** - Chat moderation
+- **irwin** - Cheat detection
+
+### Third-Party Integrations
+- **oauth** - OAuth authentication
+- **fishnet** - Stockfish integration
+- **api** - External API
+- **bot** - Bot accounts
+
+## Module Dependencies
+
+Modules are organized in a dependency hierarchy:
+
+```scala
+// Example from modules/game/src/main/Env.scala
+final class Env(
+    appConfig: Configuration,
+    db: lila.db.Db,
+    cacheApi: lila.memo.CacheApi,
+    userApi: lila.user.UserApi,
+    mongoCache: lila.memo.MongoCache.Api
+)(using
+    Executor,
+    Scheduler,
+    akka.stream.Materializer
+):
+  // Module initialization
+```
+
+### Common Dependency Patterns
+
+1. **Core modules** (db, common, memo) - Depended on by most other modules
+2. **Domain modules** (game, user, tournament) - Provide core business logic
+3. **UI modules** (web, ui) - Depend on many domain modules
+4. **Integration modules** (api, oauth) - Connect external services
+
+## Module Communication
+
+Modules communicate through:
+
+### 1. Direct API Calls
+```scala
+// From modules/tournament/src/main/Env.scala
+class Env(
+    userApi: lila.user.UserApi,
+    gameApi: lila.game.GameApi
+):
+  def createPairing(player1: UserId, player2: UserId) =
+    for
+      users <- userApi.byIds(List(player1, player2))
+      game <- gameApi.start(users)
+    yield game
+```
+
+### 2. Event Bus
+```scala
+// Publish events
+bus.publish(Event.GameStart(gameId), 'gameStart)
+
+// Subscribe to events
+bus.subscribeFun('gameStart):
+  case Event.GameStart(gameId) => handleGameStart(gameId)
+```
+
+### 3. Akka Streams
+```scala
+// Stream processing across modules
+Source(gameIds)
+  .mapAsync(4)(gameRepo.game)
+  .collect { case Some(g) => g }
+  .via(analysisFlow)
+  .runWith(Sink.ignore)
+```
+
+## All 83 Modules
+
+<Accordion title="View complete module list">
+
+1. activity
+2. analyse
+3. api
+4. appeal
+5. bookmark
+6. bot
+7. challenge
+8. chat
+9. clas (classroom)
+10. cms
+11. coach
+12. common
+13. coordinate
+14. core
+15. coreI18n
+16. db
+17. evalCache
+18. evaluation
+19. event
+20. explorer
+21. feed
+22. fide
+23. fishnet
+24. forum
+25. forumSearch
+26. game
+27. gameSearch
+28. gathering
+29. history
+30. i18n
+31. insight
+32. irc
+33. irwin
+34. jsBot
+35. learn
+36. lobby
+37. mailer
+38. memo
+39. mod
+40. msg
+41. notify
+42. oauth
+43. opening
+44. perfStat
+45. plan
+46. playban
+47. pool
+48. practice
+49. pref
+50. push
+51. puzzle
+52. racer
+53. rating
+54. recap
+55. relation
+56. relay
+57. report
+58. room
+59. round
+60. search
+61. security
+62. setup
+63. shutup
+64. simul
+65. socket
+66. storm
+67. streamer
+68. study
+69. studySearch
+70. swiss
+71. team
+72. teamSearch
+73. timeline
+74. title
+75. tournament
+76. tree
+77. tutor
+78. tv
+79. ublog
+80. ui
+81. user
+82. video
+83. web
+
+</Accordion>
+
+## Best Practices
+
+When working with the module system:
+
+1. **Keep modules focused** - Each module should have a single, clear responsibility
+2. **Minimize dependencies** - Depend only on what you need
+3. **Use core types** - Leverage shared types from the `core` module
+4. **Follow naming conventions** - Use consistent file and class naming
+5. **Document APIs** - Public APIs should be well-documented
+6. **Test independently** - Each module should have its own test suite
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Game Module" icon="chess" href="/modules/game">
+    Core chess game logic and state management
+  </Card>
+  <Card title="User Module" icon="user" href="/modules/user">
+    User authentication and profile management
+  </Card>
+  <Card title="Tournament Module" icon="trophy" href="/modules/tournament">
+    Tournament creation and management
+  </Card>
+  <Card title="Security Module" icon="shield" href="/modules/security">
+    Authentication and security features
+  </Card>
+</CardGroup>

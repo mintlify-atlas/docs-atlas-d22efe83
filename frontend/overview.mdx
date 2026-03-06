@@ -1,0 +1,247 @@
+---
+title: Frontend Architecture
+description: Overview of Lichess frontend architecture and UI module organization
+---
+
+The Lichess frontend is built as a **monorepo workspace** using pnpm, TypeScript, and Snabbdom virtual DOM. The architecture emphasizes modularity, type safety, and efficient code splitting.
+
+## Architecture Principles
+
+### Monorepo Structure
+
+All UI code lives in the `ui/` directory, organized as independent packages defined in `pnpm-workspace.yaml`:
+
+```yaml
+packages:
+  - 'bin'
+  - 'ui/*'
+  - 'ui/@types/*'
+```
+
+Each UI module is a separate package with its own:
+- `package.json` - Dependencies and build configuration
+- `src/` - TypeScript source files
+- `dist/` - Compiled JavaScript and type declarations
+
+### Module Examples
+
+Key UI modules include:
+
+- **`analyse`** - Analysis board with engine evaluation, explorer, and study features
+- **`lib`** - Shared utilities, game logic, and component helpers
+- **`site`** - Core site functionality (boot, assets, DOM handlers)
+- **`bits`** - Reusable UI components (dialogs, forms, widgets)
+- **`round`** - Live game playing interface
+- **`puzzle`** - Chess puzzle trainer
+- **`tournament`** - Tournament management UI
+
+## Workspace Dependencies
+
+Modules depend on each other using workspace references:
+
+```json
+// ui/analyse/package.json
+{
+  "dependencies": {
+    "lib": "workspace:*",
+    "bits": "workspace:*",
+    "editor": "workspace:*",
+    "keyboardMove": "workspace:*"
+  }
+}
+```
+
+The `workspace:*` version tells pnpm to resolve the dependency from the monorepo.
+
+## Module Exports
+
+Packages use the `exports` field for barrel exports and path mapping:
+
+```json
+// ui/lib/package.json
+{
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": {
+        "source": "./src/index.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "./ceval": {
+      "types": "./dist/ceval/index.d.ts",
+      "import": {
+        "source": "./src/ceval/index.ts",
+        "default": "./dist/ceval/index.js"
+      }
+    }
+  }
+}
+```
+
+This allows clean imports:
+
+```typescript
+import { prop, toggle, debounce } from 'lib';
+import { CevalCtrl, type CevalOpts } from 'lib/ceval';
+import { h, thunk, type VNode } from 'snabbdom';
+```
+
+## TypeScript Configuration
+
+Base TypeScript config (`ui/tsconfig.base.json`) enforces strict type checking:
+
+```json
+{
+  "compilerOptions": {
+    "strict": true,
+    "noUnusedLocals": true,
+    "noImplicitReturns": true,
+    "noUnusedParameters": true,
+    "isolatedModules": true,
+    "isolatedDeclarations": true,
+    "moduleResolution": "bundler",
+    "module": "ESNext",
+    "target": "ES2021",
+    "lib": ["ES2021", "DOM", "DOM.Iterable"],
+    "types": ["lichess"]
+  }
+}
+```
+
+Key features:
+- **Isolated declarations** for faster type checking
+- **Bundler resolution** optimized for esbuild
+- **Custom types** via `@types/lichess` package
+- **Path aliases** with `@/*` mapping to `src/*`
+
+## Component Architecture
+
+### Controller Pattern
+
+Most features use a controller class that manages state and behavior:
+
+```typescript
+// ui/analyse/src/ctrl.ts
+export default class AnalyseCtrl implements CevalHandler {
+  data: AnalyseData;
+  tree: TreeWrapper;
+  socket: Socket;
+  chessground: ChessgroundApi;
+  ceval: CevalCtrl;
+  
+  // Sub-controllers
+  autoplay: Autoplay;
+  explorer: ExplorerCtrl;
+  forecast?: ForecastCtrl;
+  study?: StudyCtrl;
+  
+  // Current state
+  path: TreePath;
+  node: TreeNode;
+  nodeList: TreeNode[];
+  mainline: TreeNode[];
+}
+```
+
+### View Functions
+
+Views are pure functions that take a controller and return a VNode:
+
+```typescript
+// ui/analyse/src/view/main.ts
+export default function (deps?: typeof studyDeps) {
+  return function (ctrl: AnalyseCtrl): VNode {
+    if (ctrl.nvui) return ctrl.nvui.render(deps);
+    else if (deps && ctrl.study?.relay) return relayView(ctrl, ...);
+    else if (deps && ctrl.study) return studyView(ctrl, ...);
+    else return analyseView(ctrl, deps);
+  };
+}
+```
+
+## Entry Points and Bootstrapping
+
+Each module defines entry points in its package.json:
+
+```json
+{
+  "build": {
+    "bundle": "src/**/analyse.*ts"
+  }
+}
+```
+
+This glob pattern matches:
+- `analyse.ts` - Main analysis board
+- `analyse.nvui.ts` - Screen reader interface
+- `analyse.study.ts` - Study interface
+- `analyse.user.ts` - User-specific analysis
+
+Entry points export a `boot` or `start` function:
+
+```typescript
+// ui/analyse/src/boot.ts
+export { boot } from './start';
+
+// ui/analyse/src/start.ts
+export function boot(cfg: AnalyseOpts): void {
+  const ctrl = new AnalyseCtrl(cfg);
+  const view = main();
+  site.load.then(() => {
+    site.contentLoaded(cfg.element);
+    const redraw = () => patch(cfg.element, view(ctrl));
+    redraw();
+  });
+}
+```
+
+## Asset Management
+
+The `site` module provides asset loading and management:
+
+```typescript
+// ui/site/src/site.ts
+const site = window.site;
+site.sri = randomToken();
+site.displayLocale = displayLocale;
+site.blindMode = document.body.classList.contains('blind-mode');
+site.mousetrap = new Mousetrap(document);
+site.powertip = powertip;
+site.asset = assets;
+site.sound = sound;
+```
+
+## Build Output
+
+Compiled assets go to `/public/compiled/` with content-hashed filenames:
+
+```
+analyse.a3b2c1d4.js
+lib.f5e6d7c8.js
+site.12ab34cd.js
+```
+
+Code splitting creates shared chunks automatically when multiple modules import the same code.
+
+## Development Workflow
+
+```bash
+# Watch mode - continuously rebuild on changes
+ui/build -w
+
+# Build specific modules
+ui/build analyse site
+
+# Type checking
+pnpm lint
+
+# Format code
+pnpm format
+```
+
+## Next Steps
+
+- [UI Components](/frontend/ui-components) - Component structure and patterns
+- [Build System](/frontend/build-system) - esbuild configuration and asset pipeline
+- [Snabbdom](/frontend/snabbdom) - Virtual DOM usage and helpers

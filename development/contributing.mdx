@@ -1,0 +1,268 @@
+---
+title: Contributing Guidelines
+description: How to contribute code, documentation, and artwork to Lichess
+---
+
+## Getting Started
+
+1. **Set up your development environment** - Follow the [Development Setup](/development/setup) guide
+2. **Pick an issue** - Browse [GitHub issues](https://github.com/lichess-org/lila/issues)
+   - [`good first issue`](https://github.com/lichess-org/lila/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) - Great for newcomers
+   - [`no scala`](https://github.com/lichess-org/lila/issues?q=is%3Aissue+is%3Aopen+label%3A%22no+scala%22) - Frontend/CSS/HTML work
+3. **Join the community** - Connect with other developers on [Discord](https://discord.gg/lichess)
+
+## Pull Request Guidelines
+
+### Before Submitting
+
+<Steps>
+  <Step title="Explain the change">
+    Clearly describe **why** the change is needed and what problem it solves
+  </Step>
+  
+  <Step title="Link to issues">
+    Reference relevant GitHub issues or discussions
+  </Step>
+  
+  <Step title="Keep PRs focused">
+    Prefer small, focused pull requests that change one thing at a time
+  </Step>
+  
+  <Step title="Test your code">
+    - Run the code and verify it works as intended
+    - Look out for edge cases
+    - Mark PR as draft if you haven't tested yet
+  </Step>
+  
+  <Step title="Mark as ready">
+    Only mark the PR as ready when you've confirmed everything works
+  </Step>
+</Steps>
+
+### When Unsure
+
+If you're unsure about something or want to check if a change is desired before doing the work:
+
+- Ask in the programming channels on [Discord](https://discord.gg/lichess)
+- Create a draft PR with your questions
+- Open a discussion issue before implementing
+
+## AI-Assisted Code Contributions
+
+Generated AI code **can be accepted**, but must meet these requirements:
+
+<Warning>
+  **Required for AI-generated code:**
+  
+  1. **Review and understand** all code you submit
+  2. **Be able to explain** the code if asked
+  3. **Provide proof of testing** with screenshots or video
+  4. **Include the AI prompts** used in the PR description or commit messages
+  5. **Specify the AI tool** used (e.g., ChatGPT, Claude, Copilot)
+</Warning>
+
+### Example PR Description
+
+```markdown
+## Changes
+Fixed the tournament pairing algorithm to handle byes correctly
+
+## Testing
+[Attached: video showing tournament with odd number of players]
+
+## AI Assistance
+Tool: GitHub Copilot
+Prompts used:
+- "Fix the pairing logic to assign byes when player count is odd"
+- "Add test cases for tournament bye scenarios"
+```
+
+## Code Style
+
+### Scala 3
+
+Lila uses Scala 3 with:
+
+- Significant indentation (no braces)
+- `given`/`using` for implicit parameters
+- Extension methods
+- Union types where appropriate
+
+### Formatting
+
+```bash
+# Format code before committing
+sbt scalafmtAll
+```
+
+### Module Dependencies
+
+Respect the module dependency hierarchy defined in `build.sbt`:
+
+```scala
+// Lower-level modules cannot depend on higher-level ones
+core → common → db → memo → game → round
+```
+
+## Reporting Bugs
+
+Before creating an issue:
+
+1. **List reproduction steps** - Show that other users may experience it
+2. **Search for duplicates** - Use [GitHub advanced search](https://help.github.com/articles/searching-issues/)
+3. **Be realistic** - Avoid trivial issues or those requiring unrealistic dev time
+
+### Mobile-Only Bugs
+
+Report mobile-specific bugs to [Lichess mobile](https://github.com/lichess-org/lichobile) instead.
+
+### Creating a Bug Report
+
+[**Create an issue**](https://github.com/lichess-org/lila/issues/new) with:
+
+```markdown
+## Bug Description
+Clear description of the problem
+
+## Steps to Reproduce
+1. Go to ...
+2. Click on ...
+3. See error ...
+
+## Expected Behavior
+What should happen
+
+## Actual Behavior
+What actually happens
+
+## Environment
+- Browser: Firefox 120
+- OS: Linux
+- Lichess version: [from footer]
+```
+
+## Suggesting Features
+
+<Note>
+  Before creating a feature request, discuss it on the [Lichess Feedback Forum](https://lichess.org/forum/lichess-feedback) to gauge interest.
+</Note>
+
+### Feature Request Requirements
+
+Your feature proposal must:
+
+1. **Be effective in delivering a goal** - Add real value, not just visual changes
+2. **Avoid mundane assumptions** - Point out **what needs to happen**, not how difficult you think it is
+3. **Be unique** - Don't propose features that can be replaced by simpler ideas
+4. **Be clear and concise** - Define ambiguities or propose options
+
+### Creating a Feature Request
+
+When ready, [**create an issue**](https://github.com/lichess-org/lila/issues/new) and:
+
+- Link to constructive forum discussions
+- Explain the problem it solves
+- Describe the expected behavior
+- Include mockups if UI-related
+
+<Warning>
+  Issues lacking potential or effectiveness may be closed. Feature requests that can be implemented as userscripts should remain userscripts.
+</Warning>
+
+## Non-Technical Contributions
+
+### Artwork and Documentation
+
+Issues tagged [`nontechnical`](https://github.com/lichess-org/lila/issues?q=is%3Aissue+is%3Aopen+label%3A%22non+technical%22) need artwork or documentation help.
+
+### Translations
+
+Help translate Lichess on [Crowdin](https://crowdin.com/project/lichess). The UI is available in 140+ languages!
+
+### Other Ways to Contribute
+
+See [lichess.org/help/contribute](https://lichess.org/help/contribute) for:
+
+- Donating
+- Content creation
+- Community moderation
+- Running fishnet nodes for analysis
+
+## Commit Guidelines
+
+### Commit Messages
+
+```bash
+# Good commit messages
+Fix tournament pairing with odd player count
+Add mobile responsive layout to study page
+Refactor game PGN export logic
+
+# Bad commit messages
+fixed bug
+update
+changes
+```
+
+### Commit Style
+
+- Use imperative mood ("Fix bug" not "Fixed bug")
+- First line: brief summary (50 chars or less)
+- Focus on **why**, not **what** (the diff shows what changed)
+- Reference issue numbers: `Fixes #1234`
+
+## Testing Requirements
+
+See [Testing](/development/testing) for details on:
+
+- Running unit tests
+- Integration tests
+- Manual testing procedures
+
+## Code Review Process
+
+1. **Automated checks** run on all PRs:
+   - Scala compilation
+   - Tests
+   - Code formatting
+
+2. **Maintainer review**:
+   - Code quality
+   - Architecture fit
+   - Performance implications
+
+3. **Feedback and iteration**:
+   - Address review comments
+   - Push updates to the same branch
+
+4. **Merge**:
+   - Maintainers merge approved PRs
+   - Squash commits for clean history
+
+## Development Resources
+
+- **Wiki**: [Lichess Development Onboarding](https://github.com/lichess-org/lila/wiki/Lichess-Development-Onboarding)
+- **Discord**: [https://discord.gg/lichess](https://discord.gg/lichess)
+- **Architecture**: See [README.md](https://github.com/lichess-org/lila#production-architecture-as-of-july-2022)
+- **API Docs**: [lichess.org/api](https://lichess.org/api)
+
+## License
+
+By contributing to Lila, you agree that your contributions will be licensed under the **GNU Affero General Public License v3.0 or later**.
+
+See [COPYING.md](https://github.com/lichess-org/lila/blob/master/COPYING.md) for details.
+
+## Competence Development Program
+
+Lichess supports contributors with relevant training materials and activities. This program helps contributors develop skills while contributing to Lichess.
+
+**Learn more**: [Competence Development for Lichess contributors](https://lichess.org/page/competence-development)
+
+## Getting Help
+
+Stuck? Need help?
+
+- Ask in [#programming on Discord](https://discord.gg/lichess)
+- Check the [Wiki](https://github.com/lichess-org/lila/wiki)
+- Look at existing code for examples
+- Review merged PRs for patterns

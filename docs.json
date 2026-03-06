@@ -1,122 +1,108 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Lichess",
+  "theme": "palm",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#7c7c7c",
+    "light": "#111111",
+    "dark": "#dcdcdc"
   },
-  "favicon": "/favicon.svg",
+  "favicon": "https://media.brand.dev/061b49c9-9fda-49e8-b47c-9ad0e58aa1f5.jpg",
+  "logo": {
+    "light": "https://media.brand.dev/061b49c9-9fda-49e8-b47c-9ad0e58aa1f5.jpg",
+    "dark": "https://media.brand.dev/23a24c65-34de-447a-a233-3f005a461fec.png"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/lichess-org/lila"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/lichess-org/lila"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Overview",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "architecture"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Features",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "features/gameplay",
+              "features/analysis",
+              "features/tournaments",
+              "features/puzzles",
+              "features/study"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Backend Modules",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "modules/overview",
+              "modules/game",
+              "modules/user",
+              "modules/tournament",
+              "modules/puzzle",
+              "modules/study",
+              "modules/chat",
+              "modules/security"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Frontend",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "frontend/overview",
+              "frontend/ui-components",
+              "frontend/build-system",
+              "frontend/snabbdom"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "development/setup",
+              "development/contributing",
+              "development/testing",
+              "development/database"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "HTTP API",
             "pages": [
-              "api-reference/introduction"
+              "api/overview",
+              "api/authentication",
+              "api/games",
+              "api/users",
+              "api/tournaments",
+              "api/puzzles",
+              "api/tv"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "WebSocket API",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/websocket-overview",
+              "api/websocket-events"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

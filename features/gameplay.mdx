@@ -1,0 +1,286 @@
+---
+title: Real-Time Chess Gameplay
+description: Learn how Lichess handles real-time chess games with WebSocket-based move validation, clock management, and anti-cheat features
+icon: chess-pawn
+---
+
+## Overview
+
+Lichess provides a high-performance, real-time chess gameplay engine that handles thousands of concurrent games with sub-second latency. The system supports multiple game modes including casual, rated, correspondence, tournaments, and simuls.
+
+## Game Lifecycle
+
+### Game Creation & Setup
+
+Games are created through the `setup` module which handles:
+
+- **Time controls**: Bullet, Blitz, Rapid, Classical, and Correspondence
+- **Variants**: Standard, Chess960, Crazyhouse, King of the Hill, Three-check, Antichess, Atomic, Horde, and Racing Kings
+- **Game modes**: Casual vs Rated games
+- **Special positions**: Custom FEN positions for starting positions
+
+```scala
+// From modules/game/src/main/Game.scala
+case class Game(
+  id: GameId,
+  players: Vector[Player],
+  chess: ChessGame,  // Contains board state, clock, moves
+  status: Status,
+  movedAt: Instant
+)
+```
+
+### Real-Time Move Processing
+
+The `round` module orchestrates all game actions through the `MovePlayer` component:
+
+<CodeGroup>
+
+```scala Human Moves
+// modules/round/src/main/MovePlayer.scala:26
+private[round] def human(play: HumanPlay, round: RoundAsyncActor)(
+    pov: Pov
+)(using proxy: GameProxy): Fu[Events] =
+  play match
+    case HumanPlay(_, uci, blur, lag, _) =>
+      pov match
+        case Pov(game, color) if game.playableBy(color) =>
+          applyUci(game, uci, blur, lag)
+            .fold(errs => fufail(ClientError(errs)), fuccess)
+            .flatMap:
+              case Flagged => finisher.outOfTime(game)
+              case MoveApplied(progress, moveOrDrop, compedLag) =>
+                proxy.save(progress) >>
+                  postHumanOrBotPlay(round, pov, progress, moveOrDrop)
+```
+
+```scala Bot/AI Moves
+// modules/round/src/main/MovePlayer.scala:52
+private[round] def bot(uci: Uci, round: RoundAsyncActor)(pov: Pov)(
+    using proxy: GameProxy
+): Fu[Events] =
+  applyUci(game, uci, blur = false, botLag)
+    .fold(errs => fufail(ClientError(ErrorStr.raw(errs))), fuccess)
+    .flatMap:
+      case Flagged => finisher.outOfTime(game)
+      case MoveApplied(progress, moveOrDrop, _) =>
+        proxy.save(progress) >> postHumanOrBotPlay(round, pov, progress, moveOrDrop)
+```
+
+</CodeGroup>
+
+## WebSocket Architecture
+
+### Real-Time Communication
+
+The `RoundSocket` manages all real-time game communication:
+
+```scala
+// modules/round/src/main/RoundSocket.scala:102
+private val roundHandler: SocketHandler =
+  case Protocol.In.PlayerMove(fullId, uci, blur, lag) if !stopping =>
+    rounds.tell(fullId.gameId, HumanPlay(fullId.playerId, uci, blur, lag, none))
+  case Protocol.In.PlayerDo(fullId, tpe) if !stopping =>
+    tpe match
+      case "moretime" => forward(Moretime(_))
+      case "draw-yes" => forward(RoundBus.Draw(_, true))
+      case "resign" => forward(RoundBus.Resign(_))
+      case "takeback-yes" => forward(RoundBus.Takeback(_, true))
+```
+
+<Note>
+  **Performance**: The socket system uses sticky connections and batched updates to handle 65,000+ concurrent round actors efficiently.
+</Note>
+
+### Connection States
+
+- **Connected**: Player actively viewing the game
+- **Disconnected**: Player temporarily offline (with grace period)
+- **Gone**: Extended disconnection, opponent notified
+- **Abandoned**: Game auto-aborted after 21 days of inactivity
+
+## Clock Management
+
+Lichess implements sophisticated clock management with lag compensation:
+
+```scala
+// modules/game/src/main/GameExt.scala:127
+private def applyUci(
+    game: Game,
+    uci: Uci,
+    blur: Boolean,
+    metrics: MoveMetrics
+): Either[ErrorStr, MoveResult] =
+  game.chess.moveWithCompensated(orig, dest, prom, metrics)
+    .map:
+      case (ncg, _) if ncg.value.clock.exists(_.outOfTime(game.turnColor)) => 
+        Flagged
+      case (ncg, moveOrDrop: MoveOrDrop) =>
+        MoveApplied(
+          game.applyMove(ncg.value, moveOrDrop, blur),
+          moveOrDrop,
+          ncg.compensated  // Lag compensation applied
+        )
+```
+
+### Clock Features
+
+- **Lag compensation**: Network latency automatically compensated
+- **Berserk**: Tournament feature to sacrifice half your time for bonus points
+- **Move timings**: All move times recorded for analysis
+- **Fischer increment**: Time added after each move
+- **Correspondence**: Days per move for asynchronous play
+
+## Game State & Events
+
+Every move generates events broadcast to connected clients:
+
+```scala
+// modules/game/src/main/GameExt.scala:146
+val state = Event.State(
+  turns = game.ply,
+  status = (g.status != updated.status).option(updated.status),
+  winner = game.position.winner,
+  whiteOffersDraw = g.whitePlayer.isOfferingDraw,
+  blackOffersDraw = g.blackPlayer.isOfferingDraw
+)
+
+val events = moveOrDrop.fold(
+  Event.Move(_, game.position, state, clockEvent),
+  Event.Drop(_, game.position, state, clockEvent)
+)
+```
+
+## Move Validation
+
+<Steps>
+
+<Step title="UCI Parsing">
+  Move received as UCI notation (e.g., "e2e4", "e7e8q" for promotion)
+</Step>
+
+<Step title="Turn Validation">
+  Verify it's the player's turn and game is playable
+</Step>
+
+<Step title="Legal Move Check">
+  Chess engine validates move legality including:
+  - Piece movement rules
+  - Check/checkmate detection
+  - Castling rights
+  - En passant
+  - Three-fold repetition
+  - Fifty-move rule
+</Step>
+
+<Step title="Clock Update">
+  Apply time controls and check for flagging
+</Step>
+
+<Step title="State Broadcast">
+  Send new position to all connected clients
+</Step>
+
+</Steps>
+
+## Anti-Cheat & Fair Play
+
+### Blur Detection
+
+The system tracks when players switch browser tabs during moves:
+
+```scala
+// modules/game/src/main/GameExt.scala:120
+def copyPlayer(player: Player) =
+  if blur && moveOrDrop.color == player.color then
+    player.copy(blurs = player.blurs.addAtMoveIndex(g.playerMoves(player.color)))
+  else player
+```
+
+### Hold Alert Detection
+
+Detects mouse hold patterns that may indicate computer assistance:
+
+```scala
+case class HoldAlert(fullId: GameFullId, ip: IpAddress, mean: Int, sd: Int)
+```
+
+### Move Time Analysis
+
+All move times are recorded and analyzed for consistency patterns that may indicate engine use.
+
+## AI Opponents (Stockfish)
+
+Games against AI use the Fishnet distributed analysis network:
+
+```scala
+// modules/round/src/main/MovePlayer.scala:120
+private[round] def requestFishnet(game: Game, round: RoundAsyncActor): Unit =
+  game.playableByAi.so:
+    if game.ply <= lila.core.fishnet.maxPlies then 
+      Bus.pub(lila.core.fishnet.FishnetMoveRequest(game))
+    else round ! ResignAi
+```
+
+<Warning>
+  AI games are limited to 300 plies (150 moves) to prevent resource exhaustion.
+</Warning>
+
+## Game Termination
+
+Games end through multiple pathways:
+
+- **Checkmate**: Position evaluation detects mate
+- **Stalemate**: No legal moves, game drawn
+- **Resignation**: Player voluntarily resigns
+- **Time forfeit**: Clock runs out (with grace period)
+- **Draw agreement**: Both players agree to draw
+- **Insufficient material**: Automatic draw
+- **Threefold repetition**: Position repeated 3 times
+- **Fifty-move rule**: 50 moves without capture or pawn move
+- **Abort**: Game cancelled (first 2 moves)
+
+## Performance Optimizations
+
+### Game Proxies
+
+The `GameProxy` pattern caches active games in memory:
+
+```scala
+val rounds = AsyncActorConcMap[GameId, RoundAsyncActor](
+  mkAsyncActor = id => makeRoundActor(id, version, gameFu),
+  initialCapacity = 65_536
+)
+```
+
+### Binary Encoding
+
+Move times and positions are stored in compact binary format to reduce database size.
+
+### Connection Pooling
+
+Round actors are lazily created and terminated after inactivity to manage memory.
+
+## Code References
+
+- Move processing: `modules/round/src/main/MovePlayer.scala:26`
+- Game state: `modules/game/src/main/Game.scala:1`
+- WebSocket handler: `modules/round/src/main/RoundSocket.scala:102`
+- Clock management: `modules/game/src/main/GameExt.scala:15`
+
+## Related Features
+
+<CardGroup cols={2}>
+  <Card title="Analysis Board" icon="chart-line" href="/features/analysis">
+    Analyze completed games with Stockfish
+  </Card>
+  <Card title="Tournaments" icon="trophy" href="/features/tournaments">
+    Competitive tournament formats
+  </Card>
+  <Card title="Puzzles" icon="puzzle-piece" href="/features/puzzles">
+    Tactical training from real games
+  </Card>
+  <Card title="Studies" icon="book" href="/features/study">
+    Collaborative analysis and lessons
+  </Card>
+</CardGroup>

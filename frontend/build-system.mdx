@@ -1,0 +1,479 @@
+---
+title: Build System
+description: esbuild configuration, asset pipeline, and build optimization in Lichess
+---
+
+Lichess uses a custom build system built on **esbuild** for fast bundling and **pnpm** for workspace management. The build system handles TypeScript compilation, code splitting, asset hashing, and manifest generation.
+
+## Build Script
+
+The main build script is at `ui/build`:
+
+```bash
+#!/usr/bin/env bash
+set -e
+cd "$(dirname "${BASH_SOURCE:-$0}")/.build"
+
+# Check Node version
+MIN_NODE="$(cat ../../.node-version)"
+CUR_NODE=$(node -v 2>/dev/null || echo "v0.0.0")
+
+# Install dependencies
+pnpm install
+
+# Run build
+node --experimental-strip-types --no-warnings src/main.ts "$@"
+```
+
+### Usage
+
+```bash
+# Build all modules
+ui/build
+
+# Watch mode - rebuild on changes
+ui/build -w
+
+# Build specific modules
+ui/build analyse site lib
+
+# Production build
+ui/build --prod
+
+# Help
+ui/build --help
+```
+
+## Build Configuration
+
+Each package defines a `build` property in its `package.json`:
+
+```json
+// ui/analyse/package.json
+{
+  "name": "analyse",
+  "dependencies": {
+    "lib": "workspace:*",
+    "bits": "workspace:*"
+  },
+  "build": {
+    "bundle": "src/**/analyse.*ts",
+    "sync": {
+      "node_modules/@yaireo/tagify/dist/tagify.min.js": "/public/npm",
+      "node_modules/sortablejs/modular/sortable.esm.js": "/public/npm"
+    }
+  }
+}
+```
+
+### Bundle Property
+
+Defines entry points for bundling:
+
+```json
+// Glob pattern - matches multiple files
+{
+  "bundle": "src/**/analyse.*ts"
+}
+
+// Matches:
+// - src/analyse.ts
+// - src/analyse.nvui.ts
+// - src/study/analyse.study.ts
+
+// Array of patterns
+{
+  "bundle": [
+    "src/site.*Embed.ts",
+    "src/site.*.ts"
+  ]
+}
+
+// With inline script
+{
+  "bundle": [
+    {
+      "module": "src/site.ts",
+      "inline": "src/site.inline.ts"
+    }
+  ]
+}
+```
+
+**Naming convention:** Entry point filenames must be prefixed with their package name followed by a dot:
+- `analyse.ts` ✓
+- `analyse.study.ts` ✓
+- `study.ts` ✗ (missing package prefix)
+
+### Sync Property
+
+Copies files to destination folders:
+
+```json
+{
+  "sync": {
+    "node_modules/*stockfish*/*.{js,wasm}": "/public/npm",
+    "node_modules/@lichess-org/stockfish-web/*.{js,wasm}": "/public/npm/stockfish-web"
+  }
+}
+```
+
+- Keys are source globs (package-relative or absolute with `/`)
+- Values are destination directories
+- In watch mode, files are copied when they change
+
+### Hash Property
+
+Creates content-hashed symlinks for cache-busting:
+
+```json
+{
+  "hash": [
+    "/public/font/*.woff2",
+    "/public/images/**",
+    "/public/npm/*",
+    "/public/sound/**/*.mp3"
+  ]
+}
+```
+
+For each file, a symlink is created in `/public/hashed/` with the content hash in the filename:
+
+```
+/public/font/lichess.woff2
+  → /public/hashed/font/lichess.a3b2c1d4.woff2
+```
+
+Advanced hash configuration:
+
+```json
+{
+  "hash": {
+    "path": "/public/images/**/*.svg",
+    "omit": true,
+    "catalog": "/public/compiled/sprites.json"
+  }
+}
+```
+
+- `omit: true` - Exclude from client manifest (server-only)
+- `catalog` - Update references in a JSON/text file
+
+## esbuild Configuration
+
+Build options are defined in `ui/.build/src/esbuild.ts`:
+
+```typescript
+// ui/.build/src/esbuild.ts
+import es from 'esbuild';
+
+const options: es.BuildOptions = {
+  bundle: true,
+  metafile: true,
+  treeShaking: true,
+  splitting: true,           // Code splitting
+  format: 'esm',             // ES modules
+  target: 'es2018',
+  supported: { bigint: true },
+  logLevel: 'silent',
+  sourcemap: !env.prod,      // Dev only
+  minify: env.prod,          // Production only
+  outdir: env.jsOutDir,      // /public/compiled
+  entryNames: '[name].[hash]',
+  chunkNames: 'lib.[hash]',
+  conditions: ['source'],    // Use "source" from exports
+  plugins,
+};
+
+const ctx = await es.context(options);
+if (env.watch) await ctx.watch();
+else {
+  await ctx.rebuild();
+  await ctx.dispose();
+}
+```
+
+### Key Features
+
+**Code Splitting** - Shared imports are automatically extracted into `lib.[hash].js` chunks:
+
+```typescript
+// Both analyse.ts and round.ts import this:
+import { h, type VNode } from 'lib/view';
+
+// Result:
+// analyse.a3b2c1d4.js - imports lib.f5e6d7c8.js
+// round.9e8f7d6c.js   - imports lib.f5e6d7c8.js
+// lib.f5e6d7c8.js     - shared code
+```
+
+**Conditions** - Uses `source` field from package.json `exports`:
+
+```json
+{
+  "exports": {
+    "./ceval": {
+      "types": "./dist/ceval/index.d.ts",
+      "import": {
+        "source": "./src/ceval/index.ts",  // ← esbuild uses this
+        "default": "./dist/ceval/index.js"  // ← tsc uses this
+      }
+    }
+  }
+}
+```
+
+**Source Maps** - Generated in development for debugging.
+
+**Minification** - Enabled in production builds.
+
+## Inline Scripts
+
+Inline scripts run before the page fully loads:
+
+```json
+{
+  "bundle": [
+    {
+      "module": "src/site.ts",
+      "inline": "src/site.inline.ts"
+    }
+  ]
+}
+```
+
+The inline script is compiled separately and injected into the HTML `<body>` before the main module loads:
+
+```typescript
+// ui/site/src/site.inline.ts
+const site = window.site = {} as Site;
+
+// Initialize theme before page renders (prevent FOUC)
+const theme = document.body.dataset.theme;
+if (theme) document.documentElement.className = theme;
+
+// Create load promise
+site.load = new Promise(resolve => {
+  site.contentLoaded = resolve;
+});
+```
+
+## Manifest Generation
+
+After bundling, a manifest file is generated:
+
+```json
+// public/compiled/manifest.a3b2c1d4.json
+{
+  "analyse": {
+    "js": "analyse.a3b2c1d4.js",
+    "imports": ["lib.f5e6d7c8.js"]
+  },
+  "site": {
+    "js": "site.12ab34cd.js",
+    "inline": "site.init();",
+    "css": "site.56ef78ab.css"
+  },
+  "hashed": {
+    "font/lichess.woff2": "font/lichess.9a8b7c6d.woff2",
+    "images/logo.svg": "images/logo.5e4f3d2c.svg"
+  }
+}
+```
+
+The server uses this manifest to generate HTML:
+
+```html
+<script>/* inline script */</script>
+<link rel="stylesheet" href="/compiled/site.56ef78ab.css">
+<script type="module" src="/compiled/site.12ab34cd.js"></script>
+```
+
+## TypeScript Compilation
+
+TypeScript compilation happens in parallel with bundling:
+
+```typescript
+// ui/.build/src/tsc.ts
+import ts from 'typescript';
+
+// Type checking only (--noEmit)
+const program = ts.createProgram({
+  rootNames: entryPoints,
+  options: {
+    ...tsconfig.compilerOptions,
+    noEmit: false,
+    emitDeclarationOnly: true,  // .d.ts files only
+    declaration: true,
+  },
+});
+
+const emitResult = program.emit();
+const diagnostics = ts.getPreEmitDiagnostics(program);
+```
+
+Generated `.d.ts` files allow other packages to import with full type information:
+
+```typescript
+// ui/lib/dist/index.d.ts
+export declare function prop<T>(value: T): Prop<T>;
+export interface Prop<T> {
+  (): T;
+  (value: T): T;
+}
+```
+
+## Sass Compilation
+
+Scss files are compiled to CSS:
+
+```typescript
+// ui/.build/src/sass.ts
+import sass from 'sass-embedded';
+
+const result = await sass.compileAsync(scssFile, {
+  loadPaths: [uiDir],
+  sourceMap: !env.prod,
+  style: env.prod ? 'compressed' : 'expanded',
+});
+
+// Write CSS with content hash
+const hash = contentHash(result.css);
+const filename = `${basename}.${hash}.css`;
+await fs.writeFile(join(env.cssOutDir, filename), result.css);
+```
+
+## Watch Mode
+
+In watch mode (`ui/build -w`), the build system:
+
+1. Watches source files for changes
+2. Debounces changes (300ms)
+3. Rebuilds only affected modules
+4. Updates manifest
+5. Logs completion
+
+```bash
+$ ui/build -w
+[22:15:34] ✓ bundle 12 modules
+[22:15:34] ✓ tsc lib analyse site
+[22:15:34] ✓ sass site.light site.dark
+[22:15:35] ✓ manifest manifest.a3b2c1d4.json
+
+# File change detected
+[22:16:12] ✓ bundle analyse
+[22:16:12] ✓ manifest manifest.b5c6d7e8.json
+```
+
+## Build Targets
+
+Browser support is defined in `package.json`:
+
+```json
+{
+  "browserslist": [
+    "defaults",
+    "not op_mini all",
+    "not kaios <= 4"
+  ]
+}
+```
+
+This targets modern browsers while excluding:
+- Opera Mini
+- KaiOS 4 and below
+
+## Performance Optimization
+
+### Code Splitting
+
+Shared dependencies are automatically extracted:
+
+```typescript
+// analyse.ts and round.ts both import Chessground
+import { Chessground } from '@lichess-org/chessground';
+
+// esbuild creates:
+// - analyse.[hash].js (analysis-specific code)
+// - round.[hash].js (round-specific code)
+// - lib.[hash].js (shared Chessground + dependencies)
+```
+
+### Tree Shaking
+
+Unused exports are eliminated:
+
+```typescript
+// lib/index.ts exports 50 functions
+export { prop, toggle, debounce, ... };
+
+// analyse.ts only imports 3
+import { prop, toggle, debounce } from 'lib';
+
+// Bundle only includes prop, toggle, debounce
+```
+
+### Minification
+
+Production builds are minified:
+
+```javascript
+// Before
+function createAnalyse(opts) {
+  return new AnalyseCtrl(opts);
+}
+
+// After
+function c(o){return new A(o)}
+```
+
+## Dependency Management
+
+pnpm workspace features:
+
+```yaml
+# pnpm-workspace.yaml
+packages:
+  - 'ui/*'
+  - 'ui/@types/*'
+```
+
+```bash
+# Install dependencies
+pnpm install
+
+# Add dependency to specific package
+cd ui/analyse
+pnpm add @types/sortablejs
+
+# Add workspace dependency
+pnpm add lib --workspace
+```
+
+## Build Artifacts
+
+Generated files:
+
+```
+public/
+├── compiled/
+│   ├── analyse.a3b2c1d4.js
+│   ├── lib.f5e6d7c8.js
+│   ├── site.12ab34cd.js
+│   ├── site.56ef78ab.css
+│   └── manifest.9e8f7d6c.json
+├── hashed/
+│   ├── font/
+│   │   └── lichess.a3b2c1d4.woff2 → ../../font/lichess.woff2
+│   └── images/
+│       └── logo.5e4f3d2c.svg → ../../images/logo.svg
+└── npm/
+    ├── stockfish.js
+    └── stockfish.wasm
+```
+
+## Next Steps
+
+- [Frontend Overview](/frontend/overview) - Architecture and module organization
+- [UI Components](/frontend/ui-components) - Component patterns
+- [Snabbdom](/frontend/snabbdom) - Virtual DOM usage

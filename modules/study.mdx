@@ -1,0 +1,535 @@
+---
+title: Study Module
+description: Collaborative chess studies with chapters, annotations, and sharing
+---
+
+The **study** module enables collaborative chess analysis through studies - collections of annotated game variations, opening preparations, and shared chess content.
+
+## Core Types
+
+### Study
+
+From `modules/study/src/main/Study.scala`:
+
+```scala
+case class Study(
+    @Key("_id") id: StudyId,
+    name: StudyName,
+    members: StudyMembers,
+    position: Position.Ref,              // Current chapter and path
+    ownerId: UserId,
+    visibility: Visibility,
+    settings: Settings,
+    from: Study.From,                    // Source (game, scratch, etc.)
+    likes: Study.Likes,
+    description: Option[String] = None,
+    topics: Option[StudyTopics] = None,
+    flair: Option[Flair] = None,
+    createdAt: Instant,
+    updatedAt: Instant
+) extends hub.Study:
+
+  val slug = scalalib.StringOps.slug(name.value)
+
+  def owner = members.get(ownerId)
+
+  def isOwner[U: UserIdOf](u: U) = ownerId.is(u)
+
+  def isMember[U: UserIdOf](u: U) = members.contains(u.id)
+
+  def canChat(id: UserId) = 
+    Settings.UserSelection.allows(settings.chat, this, id.some)
+
+  def canContribute[U: UserIdOf](u: U): Boolean =
+    isOwner(u) || members.get(u.id).exists(_.canContribute) || u.is(UserId.lichess)
+
+  def canView(id: Option[UserId]) = !isPrivate || id.exists(members.contains)
+
+  def isCurrent(c: Chapter.Like) = c.id == position.chapterId
+
+  def withChapter(c: Chapter.Like): Study = 
+    if isCurrent(c) then this else rewindTo(c.id)
+
+  def rewindTo(chapterId: StudyChapterId): Study =
+    copy(position = Position.Ref(chapterId = chapterId, path = UciPath.root))
+
+  def isPublic = visibility == Visibility.public
+  def isUnlisted = visibility == Visibility.unlisted
+  def isPrivate = visibility == Visibility.`private`
+
+  def isNew = (nowSeconds - createdAt.toSeconds) < 4
+
+  def isOld = (nowSeconds - updatedAt.toSeconds) > 20 * 60
+
+  def isRelay = from match
+    case _: From.Relay => true
+    case _ => false
+
+  def notable = likes.value > 10 || {
+    likes.value > 5 && createdAt.isBefore(nowInstant.minusDays(7))
+  }
+
+  def cloneFor(user: User): Study =
+    val owner = StudyMember(id = user.id, role = StudyMember.Role.Write)
+    copy(
+      id = Study.makeId,
+      members = StudyMembers(Map(user.id -> owner)),
+      ownerId = owner.id,
+      visibility = Visibility.`private`,
+      from = Study.From.Study(id),
+      likes = Likes(1),
+      createdAt = nowInstant,
+      updatedAt = nowInstant
+    )
+```
+
+### Visibility
+
+```scala
+enum Visibility:
+  case public    // Listed, searchable
+  case unlisted  // Accessible by link
+  case private   // Only members can view
+```
+
+### Study Source
+
+```scala
+object Study:
+  enum From:
+    case Scratch
+    case Game(id: GameId)
+    case Study(id: StudyId)      // Cloned from another study
+    case Relay(id: RelayId)      // Broadcast relay
+```
+
+## Chapters
+
+From `modules/study/src/main/Chapter.scala`:
+
+```scala
+case class Chapter(
+    id: StudyChapterId,
+    studyId: StudyId,
+    name: StudyChapterName,
+    setup: Chapter.Setup,
+    root: Node.Root,                 // Move tree with annotations
+    tags: Tags,                      // PGN tags
+    order: Int,
+    ownerId: UserId,
+    practice: Option[Boolean],
+    gamebook: Option[Boolean],
+    conceal: Option[Ply],
+    createdAt: Instant
+)
+
+object Chapter:
+  case class Setup(
+      gameId: Option[GameId],
+      variant: chess.variant.Variant,
+      orientation: Color,
+      fromFen: Option[Boolean] = None
+  )
+  
+  case class Like(
+      id: StudyChapterId,
+      name: StudyChapterName,
+      setup: Setup
+  )
+```
+
+## Move Tree & Nodes
+
+From `modules/study/src/main/Node.scala`:
+
+```scala
+case class Node(
+    id: UciCharPair,
+    ply: Ply,
+    move: Uci.WithSan,
+    fen: Fen.Full,
+    check: Boolean,
+    shapes: Shapes = Shapes.empty,
+    comments: Comments = Comments.empty,
+    glyphs: Glyphs = Glyphs.empty,
+    score: Option[Score] = None,
+    children: Node.Children,
+    forceVariation: Boolean = false
+)
+
+object Node:
+  case class Root(
+      ply: Ply,
+      fen: Fen.Full,
+      check: Boolean,
+      shapes: Shapes = Shapes.empty,
+      comments: Comments = Comments.empty,
+      glyphs: Glyphs = Glyphs.empty,
+      score: Option[Score] = None,
+      children: Children
+  )
+  
+  opaque type Children = Vector[Node]
+```
+
+### Annotations
+
+```scala
+// Comments on positions
+case class Comment(
+    id: Comment.Id,
+    text: Comment.Text,
+    by: Comment.Author
+)
+
+object Comment:
+  opaque type Text = String
+  
+  enum Author:
+    case User(id: UserId, name: UserName)
+    case Unknown
+    case Lichess
+
+// Visual shapes (arrows, circles)
+case class Shape(
+    brush: String,      // Color
+    orig: Square,
+    dest: Option[Square]
+)
+
+type Shapes = List[Shape]
+
+// Move assessments (!!, !, !?, ?!, ?, ??)
+case class Glyph(id: Int, symbol: String)
+type Glyphs = List[Glyph]
+```
+
+## Study Members
+
+```scala
+case class StudyMembers(members: Map[UserId, StudyMember]):
+  def get(userId: UserId): Option[StudyMember] = members.get(userId)
+  
+  def contains(userId: UserId): Boolean = members.contains(userId)
+  
+  def contributorIds: Set[UserId] = 
+    members.collect:
+      case (id, m) if m.canContribute => id
+    .toSet
+
+case class StudyMember(
+    id: UserId,
+    role: StudyMember.Role,
+    addedAt: Instant = nowInstant
+):
+  def canContribute = role >= StudyMember.Role.Write
+
+object StudyMember:
+  enum Role:
+    case Read
+    case Write
+    
+  given Ordering[Role] = Ordering.by(_.ordinal)
+```
+
+## Study Settings
+
+```scala
+// From modules/study/src/main/Settings.scala
+case class Settings(
+    computer: Settings.UserSelection,
+    explorer: Settings.UserSelection,
+    cloneable: Settings.UserSelection,
+    shareable: Settings.UserSelection,
+    chat: Settings.UserSelection,
+    sticky: Boolean,
+    description: Boolean
+)
+
+object Settings:
+  enum UserSelection:
+    case Everyone
+    case Members
+    case Contributors  
+    case Nobody
+    
+  object UserSelection:
+    def allows(
+        selection: UserSelection, 
+        study: Study, 
+        userId: Option[UserId]
+    ): Boolean = selection match
+      case Everyone => true
+      case Members => userId.exists(study.isMember)
+      case Contributors => userId.exists(study.canContribute)
+      case Nobody => false
+```
+
+## Position Reference
+
+```scala
+// From modules/study/src/main/Position.scala
+case class Position(
+    chapter: Chapter,
+    path: UciPath
+):
+  def node: Option[RootOrNode] = chapter.root.nodeAt(path)
+
+object Position:
+  case class Ref(
+      chapterId: StudyChapterId,
+      path: UciPath
+  )
+```
+
+## Chapter Operations
+
+### ChapterMaker
+
+From `modules/study/src/main/ChapterMaker.scala`:
+
+```scala
+final class ChapterMaker(
+    gameRepo: lila.game.GameRepo,
+    lightUserApi: lila.user.LightUserApi,
+    pgnDump: PgnDump
+)(using Executor):
+  
+  def fromFen(
+      study: Study,
+      data: ChapterMaker.Data
+  ): Fu[Chapter] =
+    // Create chapter from FEN position
+    ???
+  
+  def fromPgn(
+      study: Study,
+      data: ChapterMaker.Data,
+      pgn: String
+  ): Fu[Chapter] =
+    // Parse PGN and create chapter
+    ???
+  
+  def fromGame(
+      study: Study,
+      game: Game
+  ): Fu[Chapter] =
+    // Import game as chapter
+    ???
+```
+
+### Analysis Moves
+
+From `modules/study/src/main/AnaMove.scala`:
+
+```scala
+case class AnaMove(
+    orig: Square,
+    dest: Square,
+    variant: chess.variant.Variant,
+    fen: Fen.Full,
+    path: UciPath,
+    chapterId: StudyChapterId,
+    promotion: Option[PromotableRole] = None
+)
+
+object AnaMove:
+  def parse(o: JsObject): Option[AnaMove] = ???
+```
+
+## PGN Export
+
+From `modules/study/src/main/PgnDump.scala`:
+
+```scala
+final class PgnDump(
+    chapterRepo: ChapterRepo,
+    gamePgnDump: lila.game.PgnDump,
+    lightUserApi: lila.user.LightUserApi
+)(using Executor):
+  
+  def apply(
+      study: Study,
+      flags: PgnDump.Flags
+  ): Fu[List[PgnStr]] =
+    chapterRepo
+      .orderedByStudy(study.id)
+      .map: chapters =>
+        chapters.map: chapter =>
+          toPgn(study, chapter, flags)
+  
+  private def toPgn(
+      study: Study,
+      chapter: Chapter,
+      flags: PgnDump.Flags
+  ): PgnStr =
+    // Convert chapter to PGN format
+    // Include comments if flags.comments
+    // Include variations if flags.variations
+    ???
+
+object PgnDump:
+  case class Flags(
+      comments: Boolean,
+      variations: Boolean,
+      clocks: Boolean
+  )
+```
+
+## Multi-PGN Import
+
+From `modules/study/src/main/MultiPgn.scala`:
+
+```scala
+object MultiPgn:
+  private val splitPattern = """\n\n(?=\[)""".r
+  
+  def split(pgn: String, max: Int): List[String] =
+    splitPattern.split(pgn.replace("\r\n", "\n")).take(max).toList
+```
+
+## Server Evaluation
+
+From `modules/study/src/main/ServerEval.scala`:
+
+```scala
+case class ServerEval(
+    path: UciPath,
+    done: Boolean
+)
+
+object ServerEval:
+  case class Request(
+      studyId: StudyId,
+      chapterId: StudyChapterId,
+      path: UciPath,
+      variant: chess.variant.Variant,
+      initialFen: Option[Fen.Full]
+  )
+```
+
+## Study Topics
+
+```scala
+case class StudyTopics(value: List[String]):
+  def ++(other: StudyTopics) = StudyTopics((value ::: other.value).distinct)
+
+object StudyTopics:
+  val empty = StudyTopics(Nil)
+  
+  def fromString(str: String): StudyTopics =
+    StudyTopics(str.split(',').map(_.trim).filter(_.nonEmpty).toList)
+```
+
+## Gamebook Mode
+
+Interactive teaching mode:
+
+```scala
+// Chapters can be in gamebook mode
+case class Chapter(
+    ...
+    gamebook: Option[Boolean],  // True = gamebook mode
+    ...
+)
+
+// In gamebook mode:
+// - Users must find the correct moves
+// - Incorrect moves show hints
+// - Prevents free navigation
+```
+
+## GIF Export
+
+From `modules/study/src/main/GifExport.scala`:
+
+```scala
+final class GifExport(
+    ws: StandaloneWSClient,
+    lightUserApi: lila.user.LightUserApi,
+    baseUrl: String
+)(using Executor):
+  
+  def ofChapter(
+      study: Study,
+      chapter: Chapter,
+      theme: String,
+      piece: String
+  ): Fu[Array[Byte]] =
+    // Generate animated GIF of chapter
+    ???
+```
+
+## Repository
+
+### ChapterRepo
+
+```scala
+final class ChapterRepo(coll: Coll)(using Executor):
+  
+  def byId(id: StudyChapterId): Fu[Option[Chapter]]
+  
+  def byIdAndStudy(id: StudyChapterId, studyId: StudyId): Fu[Option[Chapter]]
+  
+  def firstByStudy(studyId: StudyId): Fu[Option[Chapter]]
+  
+  def orderedByStudy(studyId: StudyId): Fu[List[Chapter]]
+  
+  def insert(chapter: Chapter): Funit
+  
+  def update(chapter: Chapter): Funit
+  
+  def delete(id: StudyChapterId): Funit
+```
+
+## Real-time Collaboration
+
+Studies support real-time collaborative editing:
+
+1. **WebSocket updates** - Live position sync
+2. **Member presence** - See who's viewing
+3. **Concurrent editing** - Multiple contributors
+4. **Comment threads** - Discussion on positions
+5. **Shape drawing** - Visual annotations
+
+## Study Relay Integration
+
+For live game broadcasts:
+
+```scala
+case class Study(
+    ...
+    from: Study.From,
+    ...
+)
+
+object Study:
+  enum From:
+    case Relay(id: RelayId)
+    // Study auto-updates from relay
+```
+
+## Module Dependencies
+
+### Dependencies
+- **game** - Import games as chapters
+- **user** - Study members and ownership
+- **chat** - Study chat rooms
+- **socket** - Real-time collaboration
+- **relay** - Broadcast integration
+
+### Dependents
+- **api** - Study API endpoints
+- **studySearch** - Full-text search
+- **relay** - Broadcast studies
+
+## Related Modules
+
+<CardGroup cols={2}>
+  <Card title="Relay Module" icon="satellite-dish" href="/modules/relay">
+    Live game broadcasts and commentary
+  </Card>
+  <Card title="Analyse Module" icon="magnifying-glass" href="/modules/analyse">
+    Game analysis features
+  </Card>
+</CardGroup>

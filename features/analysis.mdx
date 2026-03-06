@@ -1,0 +1,355 @@
+---
+title: Computer Analysis with Stockfish
+description: Deep dive into Lichess's distributed analysis system powered by Stockfish and the Fishnet network
+icon: chart-line
+---
+
+## Overview
+
+Lichess provides free, unlimited computer analysis for all games using Stockfish, one of the strongest chess engines in the world. The analysis is powered by Fishnet, a distributed computing network where volunteers contribute processing power.
+
+## Analysis Architecture
+
+### Analysis Request Flow
+
+<Steps>
+
+<Step title="User Requests Analysis">
+  Player clicks "Request computer analysis" on a completed game
+</Step>
+
+<Step title="Request Validation">
+  System checks rate limits and game eligibility
+</Step>
+
+<Step title="Work Queue">
+  Analysis job added to Fishnet work queue
+</Step>
+
+<Step title="Client Acquisition">
+  Available Fishnet client claims the work
+</Step>
+
+<Step title="Stockfish Computation">
+  Client runs Stockfish on each position
+</Step>
+
+<Step title="Result Submission">
+  Analysis results sent back and stored
+</Step>
+
+<Step title="Tree Building">
+  Analysis integrated with game tree for display
+</Step>
+
+</Steps>
+
+## Fishnet Distributed Network
+
+### Analysis Request Handling
+
+```scala
+// modules/fishnet/src/main/Analyser.scala:34
+def apply(
+    game: Game,
+    sender: Sender,
+    originOpt: Option[Origin] = none
+): Fu[Analyser.Result] =
+  game.metadata.analysed
+    .so(analysisRepo.exists(game.id))
+    .flatMap:
+      if _ then fuccess(Analyser.Result.AlreadyAnalysed)
+      else if !gameApi.analysable(game) then fuccess(Analyser.Result.NotAnalysable)
+      else
+        val origin = originOpt.getOrElse:
+          if sender.system then Origin.autoHunter else Origin.manualRequest
+        limiter(sender, ownGame = game.userIds contains sender.userId)
+          .flatMap: result =>
+            (result.ok && dedup(game.id.value))
+              .so:
+                makeWork(game, sender, origin).flatMap: work =>
+                  repo.getSimilarAnalysis(work)
+                    .flatMap:
+                      case Some(similar) if similar.isAcquired => funit
+                      case _ =>
+                        evalCache.skipPositions(work.game)
+                          .flatMap: skipPositions =>
+                            repo.addAnalysis(work.copy(skipPositions = skipPositions))
+```
+
+### Request Origins
+
+Analysis can be triggered from multiple sources:
+
+- **Manual Request**: Player clicks analysis button
+- **Auto Hunter**: Anti-cheat system requests analysis
+- **Auto Tutor**: Lichess Tutor automated insights
+- **Official Broadcast**: Live tournament broadcast coverage
+
+<Note>
+  System-generated analysis requests (auto hunter, tutor) bypass concurrency limits and are prioritized differently in the queue.
+</Note>
+
+## Rate Limiting
+
+Lichess implements multi-tier rate limiting to ensure fair access:
+
+### Analysis Limits
+
+| User Type | Daily Limit | Weekly Limit | Concurrent |
+|-----------|-------------|--------------|------------|
+| Anonymous | IP-based | IP-based | 1 |
+| Free Account | 30 | 100 | 1 |
+| Patron | Unlimited | Unlimited | 3 |
+
+```scala
+// modules/fishnet/src/main/Analyser.scala:47
+limiter(
+  sender,
+  ignoreConcurrentCheck = sender.system || 
+    List(Origin.autoTutor, Origin.autoHunter).contains(origin),
+  ownGame = game.userIds contains sender.userId
+)
+```
+
+## Evaluation Cache
+
+To optimize performance, Lichess maintains a distributed evaluation cache:
+
+```scala
+// modules/fishnet/src/main/Analyser.scala:69
+evalCache
+  .skipPositions(work.game)
+  .monSuccess(_.fishnet.analysis.skipPositionsGame)
+  .flatMap: skipPositions =>
+    lila.mon.fishnet.analysis.evalCacheHits.record(skipPositions.size)
+    repo.addAnalysis(work.copy(skipPositions = skipPositions))
+```
+
+### Cache Benefits
+
+- **Faster analysis**: Cached positions skip Stockfish computation
+- **Reduced load**: Volunteers' CPUs can focus on novel positions
+- **Opening theory**: Common opening positions are pre-computed
+- **Transposition handling**: Same position via different move orders
+
+<Tip>
+  The evaluation cache is particularly effective for opening positions and common endgames, often reducing analysis time by 30-50%.
+</Tip>
+
+## Analysis Data Structure
+
+The `Analyser` component in the `analyse` module manages analysis storage:
+
+```scala
+// modules/analyse/src/main/Analyser.scala:9
+final class Analyser(
+    gameRepo: lila.core.game.GameRepo,
+    analysisRepo: AnalysisRepo
+)(using Executor)
+    extends lila.tree.Analyser:
+
+  def get(game: Game): Fu[Option[Analysis]] =
+    analysisRepo.byGame(game)
+
+  def save(analysis: Analysis): Funit =
+    analysis.id match
+      case Analysis.Id.Game(id) =>
+        gameRepo.game(id).flatMapz: prev =>
+          val game = prev.focus(_.metadata.analysed).replace(true)
+          for
+            _ <- gameRepo.setAnalysed(game.id, true)
+            _ <- analysisRepo.save(analysis)
+            _ <- sendAnalysisProgress(analysis, complete = true)
+          yield Bus.pub(actorApi.AnalysisReady(game, analysis))
+```
+
+### Analysis Components
+
+Each analysis contains:
+
+- **Evaluations**: Centipawn evaluation for each position
+- **Best moves**: Top engine moves for each position
+- **Mate sequences**: Forced mate lines when detected
+- **Classification**: Move quality (brilliant, good, inaccuracy, mistake, blunder)
+- **Accuracy percentage**: Overall play quality metric
+
+## Real-Time Progress Updates
+
+```scala
+// modules/analyse/src/main/Analyser.scala:35
+def progress(analysis: Analysis): Funit = 
+  sendAnalysisProgress(analysis, complete = false)
+
+private def sendAnalysisProgress(analysis: Analysis, complete: Boolean): Funit =
+  analysis.id match
+    case Analysis.Id.Game(id) =>
+      gameRepo.gameWithInitialFen(id).mapz: g =>
+        Bus.pub(
+          lila.tree.AnalysisProgress(
+            id,
+            () => makeProgressPayload(analysis, g.game, g.fen)
+          )
+        )
+```
+
+Progress updates are pushed via WebSocket as the Fishnet client completes each position.
+
+## Study & Broadcast Analysis
+
+Analysis works differently for study chapters:
+
+```scala
+// modules/fishnet/src/main/Analyser.scala:86
+def study(req: lila.core.fishnet.Bus.StudyChapterRequest): Fu[Analyser.Result] =
+  analysisRepo.chapterExists(req.chapterId)
+    .flatMap:
+      if _ then fuccess(Analyser.Result.NoChapter)
+      else
+        val sender = Sender(req.userId, none, mod = false, system = false)
+        val limitFu =
+          if req.official then fuccess(Analyser.Result.Ok)
+          else limiter(sender, ignoreConcurrentCheck = true, ownGame = false)
+        limitFu.flatMap: result =>
+          val work = makeWork(
+            game = Work.Game(
+              id = chapterId.value,
+              initialFen = initialFen,
+              studyId = studyId.some,
+              variant = variant,
+              moves = moves.take(maxPlies).map(_.uci).mkString(" ")
+            ),
+            startPly = Ply(initialFen.map(_.colorOrWhite).so(_.fold(0, 1))),
+            sender = sender,
+            origin = if req.official then Origin.officialBroadcast else Origin.manualRequest
+          )
+```
+
+<Info>
+  Official broadcast chapters (live tournament coverage) bypass rate limits and are prioritized in the analysis queue.
+</Info>
+
+## Accuracy Calculation
+
+Lichess computes an accuracy percentage based on centipawn loss:
+
+```scala
+// modules/analyse/src/main/AccuracyPercent.scala
+// Converts centipawn loss to percentage accuracy
+// Perfect play = 100%, increasing inaccuracies reduce percentage
+```
+
+Accuracy formula accounts for:
+- Position complexity
+- Available alternatives
+- Missed tactical opportunities
+- Forced sequences
+
+## Move Classification
+
+The `Annotator` analyzes each move and assigns classifications:
+
+```scala
+// modules/analyse/src/main/Annotator.scala
+// Classifications:
+// - Brilliant (?!!): Best move in a complex position
+// - Good (!): Strong move, often the engine's choice
+// - Inaccuracy (?!): Slight error, small centipawn loss
+// - Mistake (?): Notable error, significant loss
+// - Blunder (??): Major error, game-changing mistake
+// - Missed Win: Failed to find forced winning sequence
+```
+
+## Analysable Variants
+
+Not all game variants support computer analysis:
+
+```scala
+// modules/game/src/main/Game.scala:251
+val analysableVariants: Set[Variant] = Set(
+  chess.variant.Standard,
+  chess.variant.Crazyhouse,
+  chess.variant.Chess960,
+  chess.variant.KingOfTheHill,
+  chess.variant.ThreeCheck,
+  chess.variant.Antichess,
+  chess.variant.FromPosition,
+  chess.variant.Horde,
+  chess.variant.Atomic,
+  chess.variant.RacingKings
+)
+```
+
+### Eligibility Requirements
+
+```scala
+// modules/game/src/main/GameExt.scala:50
+def analysable(g: Game) =
+  g.replayable && g.playedPlies > 4 &&
+    Game.analysableVariants(g.variant) &&
+    !Game.isOldHorde(g)
+```
+
+Games must:
+- Be completed (finished or aborted after moves)
+- Have more than 4 plies (2 full moves)
+- Use a supported variant
+- Not be legacy Horde games (pre-2015 rule change)
+
+## External Engine Support
+
+Lichess allows users to connect their own chess engines:
+
+```scala
+// modules/analyse/src/main/ExternalEngine.scala
+// Users can register local Stockfish or other UCI engines
+// Analysis runs client-side, results displayed in UI
+```
+
+External engines provide:
+- Cloud analysis alternative for privacy
+- Custom engine configurations
+- Multi-PV (principal variation) lines
+- Deeper analysis depths
+
+## Performance Metrics
+
+The system monitors analysis performance:
+
+```scala
+lila.mon.fishnet.analysis.requestCount("game").increment()
+lila.mon.fishnet.analysis.evalCacheHits.record(skipPositions.size)
+lila.mon.fishnet.analysis.skipPositionsGame // Success rate metrics
+```
+
+Key metrics tracked:
+- Request queue depth
+- Average analysis time
+- Cache hit rate
+- Client availability
+- Error rates
+
+## Code References
+
+- Fishnet analyzer: `modules/fishnet/src/main/Analyser.scala:34`
+- Analysis storage: `modules/analyse/src/main/Analyser.scala:15`
+- Accuracy calculation: `modules/analyse/src/main/AccuracyPercent.scala`
+- Move annotation: `modules/analyse/src/main/Annotator.scala`
+- Cache integration: `modules/evalCache/src/main/EvalCacheApi.scala`
+
+## Related Features
+
+<CardGroup cols={2}>
+  <Card title="Gameplay" icon="chess-pawn" href="/features/gameplay">
+    Real-time chess gameplay system
+  </Card>
+  <Card title="Studies" icon="book" href="/features/study">
+    Annotate analysis in collaborative studies
+  </Card>
+  <Card title="Puzzles" icon="puzzle-piece" href="/features/puzzles">
+    Puzzles generated from analyzed games
+  </Card>
+  <Card title="Learn More" icon="network-wired" href="https://lichess.org/page/fishnet">
+    Contribute computing power to Fishnet
+  </Card>
+</CardGroup>

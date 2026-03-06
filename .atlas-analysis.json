@@ -1,0 +1,113 @@
+{
+  "projectType": "saas",
+  "projectName": "Lichess",
+  "projectDescription": "Free, open-source online chess server with realtime gameplay, tournaments, puzzles, and analysis tools",
+  "theme": "palm",
+  "primaryColor": "#7c7c7c",
+  "lightColor": "#111111",
+  "darkColor": "#dcdcdc",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/gameplay",
+              "features/analysis",
+              "features/tournaments",
+              "features/puzzles",
+              "features/study"
+            ]
+          },
+          {
+            "group": "Backend Modules",
+            "pages": [
+              "modules/overview",
+              "modules/game",
+              "modules/user",
+              "modules/tournament",
+              "modules/puzzle",
+              "modules/study",
+              "modules/chat",
+              "modules/security"
+            ]
+          },
+          {
+            "group": "Frontend",
+            "pages": [
+              "frontend/overview",
+              "frontend/ui-components",
+              "frontend/build-system",
+              "frontend/snabbdom"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "development/setup",
+              "development/contributing",
+              "development/testing",
+              "development/database"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "HTTP API",
+            "pages": [
+              "api/overview",
+              "api/authentication",
+              "api/games",
+              "api/users",
+              "api/tournaments",
+              "api/puzzles",
+              "api/tv"
+            ]
+          },
+          {
+            "group": "WebSocket API",
+            "pages": [
+              "api/websocket-overview",
+              "api/websocket-events"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Real-time chess gameplay",
+    "Computer analysis with Stockfish",
+    "Tournaments and simuls",
+    "Tactical puzzle trainer",
+    "Study and analysis boards",
+    "Multi-language support (140+ languages)",
+    "Free and open-source",
+    "4.7+ billion games database"
+  ],
+  "publicApiSurface": [
+    "GET /api/account",
+    "GET /api/user/{username}",
+    "GET /api/games/user/{username}",
+    "GET /api/tournament",
+    "GET /api/puzzle/daily",
+    "GET /api/tv/channels",
+    "POST /api/challenge/{username}",
+    "POST /api/bot/game/{gameId}/move/{move}",
+    "GET /api/stream/event",
+    "GET /api/board/game/stream/{gameId}"
+  ]
+}
